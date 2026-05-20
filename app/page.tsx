@@ -22,7 +22,7 @@ import {
   AuthUser,
   getCurrentUser,
   logoutUser,
-} from "@/lib/auth";
+} from "@/lib/signup/auth";
 
 const floatingSignals = [
   {
@@ -130,13 +130,19 @@ export default function LandingPage() {
             </Link>
 
             <div className="hidden items-center gap-9 text-xs font-bold text-slate-500 md:flex">
-              <a href="#service-flow" className="transition hover:text-slate-950">
+              <a
+                href="#service-flow"
+                className="transition hover:text-slate-950"
+              >
                 서비스 흐름
               </a>
               <a href="#daily-view" className="transition hover:text-slate-950">
                 데일리 브리핑
               </a>
-              <a href="#report-view" className="transition hover:text-slate-950">
+              <a
+                href="#report-view"
+                className="transition hover:text-slate-950"
+              >
                 분석 노트
               </a>
             </div>
@@ -204,8 +210,7 @@ export default function LandingPage() {
             흩어진 시장 정보를 AI가 한데 모아,
             <br />
             오늘 주목할 종목의 흐름과 관찰 포인트를
-            <br />
-            내 투자 성향에 맞춘 Daily Brief로
+            <br />내 투자 성향에 맞춘 Daily Brief로
           </p>
 
           <div className="landing-enter landing-enter-4 mt-8 flex flex-wrap justify-center gap-3">
@@ -238,20 +243,23 @@ export default function LandingPage() {
               <aside className="hidden border-r border-slate-100 bg-white p-5 lg:block">
                 <p className="text-sm font-black">Genvi</p>
                 <div className="mt-8 space-y-2 text-xs font-bold">
-                  {["Dashboard", "Daily Picks", "AI Report", "Auto Trading"].map(
-                    (item, index) => (
-                      <div
-                        key={item}
-                        className={`rounded-xl px-3 py-3 ${
-                          index === 0
-                            ? "bg-indigo-50 text-indigo-700"
-                            : "text-slate-400"
-                        }`}
-                      >
-                        {item}
-                      </div>
-                    ),
-                  )}
+                  {[
+                    "Dashboard",
+                    "Daily Picks",
+                    "AI Report",
+                    "Auto Trading",
+                  ].map((item, index) => (
+                    <div
+                      key={item}
+                      className={`rounded-xl px-3 py-3 ${
+                        index === 0
+                          ? "bg-indigo-50 text-indigo-700"
+                          : "text-slate-400"
+                      }`}
+                    >
+                      {item}
+                    </div>
+                  ))}
                 </div>
               </aside>
 
@@ -382,7 +390,8 @@ export default function LandingPage() {
               Daily UX
             </p>
             <h2 className="mt-4 text-3xl font-black tracking-normal text-slate-950 sm:text-5xl">
-              매일 확인할 화면은 <br />짧고 분명하게.
+              매일 확인할 화면은 <br />
+              짧고 분명하게.
             </h2>
             <p className="mt-5 max-w-[560px] text-sm leading-7 text-slate-500">
               종목을 단순히 나열하기보다, 오늘 먼저 살펴볼 후보와 관련 근거를{" "}
@@ -404,22 +413,22 @@ export default function LandingPage() {
                 { title: "기업 공시 확인", detail: "주요 공시 포인트" },
                 { title: "가격 흐름 점검", detail: "시세 변화 요약" },
               ].map((item, index) => (
-                  <div
-                    key={item.title}
-                    className="grid grid-cols-[44px_1fr_auto] items-center gap-4 rounded-2xl bg-white/8 p-4"
-                  >
-                    <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-white font-black text-slate-950">
-                      {index + 1}
-                    </div>
-                    <div>
-                      <p className="font-black">{item.title}</p>
-                      <p className="mt-1 text-xs font-bold text-white/45">
-                        {item.detail}
-                      </p>
-                    </div>
-                    <IoArrowForward className="h-5 w-5 text-white/45" />
+                <div
+                  key={item.title}
+                  className="grid grid-cols-[44px_1fr_auto] items-center gap-4 rounded-2xl bg-white/8 p-4"
+                >
+                  <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-white font-black text-slate-950">
+                    {index + 1}
                   </div>
-                ))}
+                  <div>
+                    <p className="font-black">{item.title}</p>
+                    <p className="mt-1 text-xs font-bold text-white/45">
+                      {item.detail}
+                    </p>
+                  </div>
+                  <IoArrowForward className="h-5 w-5 text-white/45" />
+                </div>
+              ))}
             </div>
           </div>
         </section>
@@ -441,7 +450,10 @@ export default function LandingPage() {
                 "공시 이벤트는 단기 변동성보다 중장기 계획에 가깝습니다.",
                 "사용자 성향 기준으로 과도한 비중 확대는 주의가 필요합니다.",
               ].map((line) => (
-                <div key={line} className="flex gap-3 rounded-2xl bg-slate-50 p-4">
+                <div
+                  key={line}
+                  className="flex gap-3 rounded-2xl bg-slate-50 p-4"
+                >
                   <IoCheckmarkCircle className="mt-0.5 h-5 w-5 shrink-0 text-emerald-500" />
                   <p className="text-sm font-semibold leading-6 text-slate-600">
                     {line}
@@ -488,8 +500,8 @@ export default function LandingPage() {
             <span>Gentle Viking</span>
           </div>
           <p className="mt-6 text-xs font-medium leading-6 text-slate-400 sm:text-sm">
-            제공하는 투자 정보는 고객의 투자 판단을 위한 단순 참고용일 뿐,
-            투자 제안 및 권유, 종목 추천을 위해 작성된 것이 아닙니다.
+            제공하는 투자 정보는 고객의 투자 판단을 위한 단순 참고용일 뿐, 투자
+            제안 및 권유, 종목 추천을 위해 작성된 것이 아닙니다.
           </p>
         </footer>
       </main>

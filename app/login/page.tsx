@@ -1,9 +1,9 @@
-'use client';
+"use client";
 
-import { FormEvent, useEffect, useState } from 'react';
-import Link from 'next/link';
-import Image from 'next/image';
-import { useRouter } from 'next/navigation';
+import { FormEvent, useEffect, useState } from "react";
+import Link from "next/link";
+import Image from "next/image";
+import { useRouter } from "next/navigation";
 import {
   IoArrowForward,
   IoChevronBackOutline,
@@ -11,15 +11,15 @@ import {
   IoEyeOutline,
   IoLockClosedOutline,
   IoMailOutline,
-} from 'react-icons/io5';
-import { FcGoogle } from 'react-icons/fc';
-import { getCurrentUser, googleLogin, loginUser } from '@/lib/auth';
+} from "react-icons/io5";
+import { FcGoogle } from "react-icons/fc";
+import { getCurrentUser, googleLogin, loginUser } from "@/lib/signup/auth";
 
 const Login = () => {
   const router = useRouter();
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [error, setError] = useState('');
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
   const [showPw, setShowPw] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isGoogleLoading, setIsGoogleLoading] = useState(false);
@@ -31,16 +31,16 @@ const Login = () => {
 
   useEffect(() => {
     if (getCurrentUser()) {
-      router.replace('/dashboard');
+      router.replace("/dashboard");
     }
   }, [router]);
 
   const handleLogin = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    setError('');
+    setError("");
 
     if (!email.trim() || !password) {
-      setError('이메일과 비밀번호를 모두 입력해주세요.');
+      setError("이메일과 비밀번호를 모두 입력해주세요.");
       return;
     }
 
@@ -53,7 +53,7 @@ const Login = () => {
       return;
     }
 
-    router.push('/dashboard');
+    router.push("/dashboard");
   };
 
   return (
@@ -127,7 +127,7 @@ const Login = () => {
               <IoLockClosedOutline className="absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400" />
               <input
                 id="login-password"
-                type={showPw ? 'text' : 'password'}
+                type={showPw ? "text" : "password"}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="비밀번호를 입력하세요"
@@ -139,7 +139,7 @@ const Login = () => {
                 type="button"
                 onClick={() => setShowPw((v) => !v)}
                 className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 transition hover:text-slate-700"
-                aria-label={showPw ? '비밀번호 숨기기' : '비밀번호 보기'}
+                aria-label={showPw ? "비밀번호 숨기기" : "비밀번호 보기"}
               >
                 {showPw ? (
                   <IoEyeOffOutline className="h-5 w-5" />
@@ -161,7 +161,7 @@ const Login = () => {
             disabled={isSubmitting}
             className="mt-7 inline-flex h-13 w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-indigo-600 via-violet-600 to-sky-500 px-5 py-4 text-sm font-black text-white shadow-[0_16px_40px_rgba(79,70,229,0.22)] transition hover:scale-[1.01] disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {isSubmitting ? '로그인 중...' : '로그인'}
+            {isSubmitting ? "로그인 중..." : "로그인"}
             <IoArrowForward className="h-4 w-4" />
           </button>
 
@@ -179,11 +179,11 @@ const Login = () => {
             aria-label="구글로 로그인"
           >
             <FcGoogle className="h-5 w-5" />
-            {isGoogleLoading ? 'Google 연결 중...' : 'Google로 계속하기'}
+            {isGoogleLoading ? "Google 연결 중..." : "Google로 계속하기"}
           </button>
 
           <div className="mt-5 text-center text-sm font-semibold text-slate-500">
-            아직 계정이 없나요?{' '}
+            아직 계정이 없나요?{" "}
             <Link href="/signup" className="font-black text-indigo-600">
               회원가입
             </Link>

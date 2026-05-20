@@ -62,7 +62,7 @@ const DEMO_USER: StoredUser = {
     experience: "STOCK_ETF",
     volatility: "MID",
   },
-  riskScore: 12,
+  riskScore: 3,
   riskLabel: "위험중립형",
   createdAt: "2026-01-01T00:00:00.000Z",
 };

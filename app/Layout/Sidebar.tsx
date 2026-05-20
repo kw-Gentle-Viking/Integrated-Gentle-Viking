@@ -19,7 +19,7 @@ import {
 } from "react-icons/fi";
 import { TbReportAnalytics } from "react-icons/tb";
 import { useSidebar } from "@/components/sidebar/SidebarContext";
-import { logoutUser } from "@/lib/auth";
+import { logoutUser } from "@/lib/signup/auth";
 
 const NAV_ITEMS = [
   { name: "홈", href: "/dashboard", icon: FiGrid },
@@ -47,7 +47,8 @@ export default function Sidebar() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { isOpen, toggleSidebar } = useSidebar();
-  const isStandalonePage = pathname === "/" || pathname === "/login" || pathname === "/signup";
+  const isStandalonePage =
+    pathname === "/" || pathname === "/login" || pathname === "/signup";
   if (isStandalonePage) return null;
 
   const activeMypageTab = searchParams.get("tab") ?? "assets";
@@ -62,10 +63,13 @@ export default function Sidebar() {
     ? "flex items-center justify-between rounded-lg px-3 py-2.5 text-sm font-semibold transition-all"
     : "mx-auto flex h-11 w-11 items-center justify-center rounded-lg text-sm font-semibold transition-all";
 
-  const renderLink = (item: (typeof NAV_ITEMS)[number] | (typeof SECONDARY_ITEMS)[number]) => {
+  const renderLink = (
+    item: (typeof NAV_ITEMS)[number] | (typeof SECONDARY_ITEMS)[number],
+  ) => {
     const Icon = item.icon;
     const itemPath = item.href.split("?")[0];
-    const isActive = pathname === itemPath || (itemPath === "/dashboard" && pathname === "/");
+    const isActive =
+      pathname === itemPath || (itemPath === "/dashboard" && pathname === "/");
 
     return (
       <Link
@@ -78,12 +82,16 @@ export default function Sidebar() {
             : "text-slate-500 hover:bg-white hover:text-slate-950"
         }`}
       >
-        <span className={`flex items-center ${isOpen ? "gap-3" : "justify-center"}`}>
+        <span
+          className={`flex items-center ${isOpen ? "gap-3" : "justify-center"}`}
+        >
           <Icon className="h-4 w-4 shrink-0" />
           {isOpen ? item.name : null}
         </span>
         {isOpen && "badge" in item && item.badge ? (
-          <span className={`flex h-5 min-w-5 items-center justify-center rounded-full px-1 text-[10px] ${isActive ? "bg-white/20 text-white" : "bg-orange-100 text-orange-600"}`}>
+          <span
+            className={`flex h-5 min-w-5 items-center justify-center rounded-full px-1 text-[10px] ${isActive ? "bg-white/20 text-white" : "bg-orange-100 text-orange-600"}`}
+          >
             {item.badge}
           </span>
         ) : null}
@@ -98,7 +106,9 @@ export default function Sidebar() {
       }`}
     >
       <div className="pointer-events-none absolute left-0 top-0 h-[360px] w-[300px] rounded-full bg-[radial-gradient(circle_at_35%_35%,rgba(82,103,255,0.26),rgba(125,211,252,0.18)_38%,rgba(244,114,182,0.12)_62%,transparent_72%)] blur-3xl" />
-      <div className={`relative z-10 mb-8 flex w-full items-center ${isOpen ? "justify-between" : "justify-center"}`}>
+      <div
+        className={`relative z-10 mb-8 flex w-full items-center ${isOpen ? "justify-between" : "justify-center"}`}
+      >
         {isOpen ? (
           <Link href="/dashboard" className="flex items-center">
             <Image
@@ -145,7 +155,9 @@ export default function Sidebar() {
         ) : null}
       </div>
 
-      <nav className={`relative z-10 w-full space-y-1.5 ${isOpen ? "" : "flex flex-col items-center"}`}>
+      <nav
+        className={`relative z-10 w-full space-y-1.5 ${isOpen ? "" : "flex flex-col items-center"}`}
+      >
         {NAV_ITEMS.map((item) => (
           <div key={item.href} className="w-full">
             {renderLink(item)}
@@ -176,14 +188,18 @@ export default function Sidebar() {
         ))}
       </nav>
 
-      <div className={`relative z-10 mt-auto w-full space-y-1.5 ${isOpen ? "" : "flex flex-col items-center"}`}>
+      <div
+        className={`relative z-10 mt-auto w-full space-y-1.5 ${isOpen ? "" : "flex flex-col items-center"}`}
+      >
         {SECONDARY_ITEMS.map(renderLink)}
         <button
           onClick={handleLogout}
           title={isOpen ? undefined : "로그아웃"}
           className={`${linkBaseClass} w-full ${isOpen ? "" : "mx-auto"} text-slate-500 hover:bg-white hover:text-slate-950`}
         >
-          <span className={`flex items-center ${isOpen ? "gap-3" : "justify-center"}`}>
+          <span
+            className={`flex items-center ${isOpen ? "gap-3" : "justify-center"}`}
+          >
             <FiLogOut className="h-4 w-4" />
             {isOpen ? "로그아웃" : null}
           </span>

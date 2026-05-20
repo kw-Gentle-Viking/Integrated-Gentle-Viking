@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { AUTH_EVENT_NAME, getCurrentUser } from "@/lib/auth";
+import { AUTH_EVENT_NAME, getCurrentUser } from "@/lib/signup/auth";
 
 export default function ProfileSettings() {
   const [nickname, setNickname] = useState("Gentle Viking");
@@ -70,8 +70,12 @@ export default function ProfileSettings() {
 
       <section className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-slate-100 bg-slate-50 p-5">
         <div>
-          <h2 className="text-lg font-black text-slate-950">AI 자동거래 알림</h2>
-          <p className="mt-1 text-sm font-medium text-slate-400">체결과 리스크 변동을 알림으로 받습니다.</p>
+          <h2 className="text-lg font-black text-slate-950">
+            AI 자동거래 알림
+          </h2>
+          <p className="mt-1 text-sm font-medium text-slate-400">
+            체결과 리스크 변동을 알림으로 받습니다.
+          </p>
         </div>
         <button
           type="button"
@@ -79,7 +83,9 @@ export default function ProfileSettings() {
           className={`flex h-8 w-14 items-center rounded-full p-1 transition ${autoTrade ? "bg-[#5267ff]" : "bg-slate-300"}`}
           aria-pressed={autoTrade}
         >
-          <span className={`h-6 w-6 rounded-full bg-white shadow-sm transition ${autoTrade ? "translate-x-6" : ""}`} />
+          <span
+            className={`h-6 w-6 rounded-full bg-white shadow-sm transition ${autoTrade ? "translate-x-6" : ""}`}
+          />
         </button>
       </section>
 
