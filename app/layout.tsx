@@ -1,6 +1,7 @@
 import "./globals.css";
 import type { Metadata } from "next";
 import { SidebarProvider } from "../components/sidebar/SidebarContext";
+import { StockListProvider } from "../lib/stock-list/StockListContext";
 import Header from "./Layout/Header";
 import Footer from "./Layout/Footer";
 import LayoutBody from "./Layout/LayoutBody";
@@ -18,13 +19,15 @@ export default function RootLayout({
   return (
     <html lang="ko">
       <body className="bg-white text-[#333D4B] overflow-x-hidden">
-        <SidebarProvider>
-          <div className="min-h-screen flex flex-col relative">
-            <Header />
-            <LayoutBody>{children}</LayoutBody>
-            <Footer />
-          </div>
-        </SidebarProvider>
+        <StockListProvider>
+          <SidebarProvider>
+            <div className="min-h-screen flex flex-col relative">
+              <Header />
+              <LayoutBody>{children}</LayoutBody>
+              <Footer />
+            </div>
+          </SidebarProvider>
+        </StockListProvider>
       </body>
     </html>
   );

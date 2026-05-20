@@ -115,19 +115,19 @@ export default function DashboardPage() {
 
         <Link
           href="/mypage?tab=assets"
-          className="block rounded-2xl bg-slate-950 p-4 text-white shadow-[0_20px_60px_rgba(15,23,42,0.18)] transition hover:-translate-y-0.5 hover:bg-slate-900 hover:shadow-[0_28px_90px_rgba(15,23,42,0.24)]"
+          className="block rounded-2xl bg-blue-50 p-4 text-slate-800 shadow-[0_20px_60px_rgba(82,103,255,0.10)] transition hover:-translate-y-0.5 hover:bg-blue-100/60 hover:shadow-[0_28px_90px_rgba(82,103,255,0.16)]"
         >
-          <p className="text-sm font-bold text-slate-300">내 자산</p>
-          <p className="mt-2 text-2xl font-black text-white">139만 7,380원</p>
-          <p className="mt-2 text-sm font-bold text-emerald-300">+2.37% 오늘</p>
+          <p className="text-sm font-bold text-blue-500">내 자산</p>
+          <p className="mt-2 text-2xl font-black text-slate-900">139만 7,380원</p>
+          <p className="mt-2 text-sm font-bold text-blue-400">+2.37% 오늘</p>
           <div className="mt-4 grid grid-cols-2 gap-3">
-            <div className="rounded-xl bg-white/10 p-2.5 ring-1 ring-white/10">
+            <div className="rounded-xl bg-white/70 p-2.5 ring-1 ring-blue-100">
               <p className="text-xs text-slate-400">수익</p>
-              <p className="mt-1 font-black text-white">+29,770원</p>
+              <p className="mt-1 font-black text-slate-800">+29,770원</p>
             </div>
-            <div className="rounded-xl bg-white/10 p-2.5 ring-1 ring-white/10">
+            <div className="rounded-xl bg-white/70 p-2.5 ring-1 ring-blue-100">
               <p className="text-xs text-slate-400">현금</p>
-              <p className="mt-1 font-black text-white">86,539원</p>
+              <p className="mt-1 font-black text-slate-800">86,539원</p>
             </div>
           </div>
         </Link>
@@ -250,14 +250,14 @@ export default function DashboardPage() {
       </section>
 
       <section className="grid gap-4 xl:grid-cols-3">
-        <article className="rounded-2xl bg-[#0f1f3d] p-4 text-white shadow-[0_20px_60px_rgba(15,31,61,0.16)]">
+        <article className="rounded-2xl bg-violet-50 p-4 shadow-[0_20px_60px_rgba(139,92,246,0.10)]">
           <div className="mb-3 flex items-center justify-between">
             <div>
-              <h2 className="mt-1 text-base font-black text-white">
+              <h2 className="mt-1 text-base font-black text-slate-900">
                 오늘의 뉴스
               </h2>
             </div>
-            <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-white/10 text-sky-200 ring-1 ring-white/10">
+            <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-violet-100 text-violet-500">
               <FiBookOpen className="h-4 w-4" />
             </span>
           </div>
@@ -266,15 +266,15 @@ export default function DashboardPage() {
             {mockTodayNews.slice(0, 3).map((news) => (
               <div
                 key={news.title}
-                className="rounded-lg bg-white/10 px-2.5 py-2 ring-1 ring-white/10 transition hover:bg-white/15"
+                className="rounded-lg bg-white/80 px-2.5 py-2 ring-1 ring-violet-100 transition hover:bg-white"
               >
                 <div className="mb-0.5 flex items-center justify-between gap-3">
-                  <span className="text-xs font-black text-sky-200">뉴스</span>
+                  <span className="text-xs font-black text-violet-400">뉴스</span>
                   <span className="text-xs font-bold text-slate-400">
                     {news.time}
                   </span>
                 </div>
-                <p className="text-xs font-black leading-5 text-white">
+                <p className="text-xs font-black leading-5 text-slate-800">
                   {news.title}
                 </p>
                 <p className="mt-0.5 text-xs font-bold text-slate-400">
