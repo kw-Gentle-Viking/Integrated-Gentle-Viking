@@ -59,10 +59,12 @@ function StockRow({ stock }: { stock: (typeof mockPopularStocks)[number] }) {
           onCancel={() => setPendingCart(false)}
         />
       )}
-      <button
-        type="button"
+      <div
+        role="button"
+        tabIndex={0}
         onClick={() => setOpen((v) => !v)}
-        className="grid w-full grid-cols-[2rem_1fr_auto_auto_auto_auto_auto_1.5rem] items-center gap-x-2 py-3 text-left transition hover:bg-slate-50/60"
+        onKeyDown={(e) => e.key === "Enter" && setOpen((v) => !v)}
+        className="grid w-full cursor-pointer grid-cols-[2rem_1fr_auto_auto_auto_auto_auto_1.5rem] items-center gap-x-2 py-3 text-left transition hover:bg-slate-50/60"
       >
         <span
           className={`flex h-7 w-7 items-center justify-center rounded-lg text-xs font-black ${
@@ -106,7 +108,7 @@ function StockRow({ stock }: { stock: (typeof mockPopularStocks)[number] }) {
         <FiChevronDown
           className={`h-4 w-4 text-slate-400 transition-transform duration-200 ${open ? "rotate-180" : ""}`}
         />
-      </button>
+      </div>
 
       {open && (
         <div className="pb-4 pt-1">

@@ -270,6 +270,7 @@ export default function AIReportPage() {
     };
   }, []);
 
+
   const refreshReport = () => {
     setIsGenerating(true);
     setSelectedStock(null);
