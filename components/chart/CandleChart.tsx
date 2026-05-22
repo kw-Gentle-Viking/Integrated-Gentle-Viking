@@ -1,103 +1,66 @@
-'use client';
-import { useEffect, useMemo, useRef } from 'react';
-import {
-  createChart,
-  CrosshairMode,
-  IChartApi,
-  ISeriesApi,
-  CandlestickData,
-  UTCTimestamp,
-  CandlestickSeries,
-} from 'lightweight-charts';
-import { CandleType } from '@/lib/chart/types';
+"use client";
 
-type Props = {
-  data: CandleType[];
+import { useEffect, useRef } from "react";
+import { CandlestickSeries, ColorType, createChart, UTCTimestamp } from "lightweight-charts";
+import type { CandleType } from "@/lib/chart/types";
+
+interface Props {
+  candles: CandleType[];
   height?: number;
-  className?: string;
-};
+}
 
-export default function CandleChart({ data, height = 420, className }: Props) {
+export default function CandleChart({ candles, height = 280 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const chartRef = useRef<IChartApi | null>(null);
-  const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
-
-  const chartData: CandlestickData[] = useMemo(() => {
-    return data.map((d) => ({
-      time: d.time as UTCTimestamp,
-      open: d.open,
-      high: d.high,
-      low: d.low,
-      close: d.close,
-    }));
-  }, [data]);
 
   useEffect(() => {
-    if (!containerRef.current) return;
+    const el = containerRef.current;
+    if (!el || candles.length === 0) return;
 
-    const chart = createChart(containerRef.current, {
+    const chart = createChart(el, {
+      width: el.clientWidth,
       height,
-      width: containerRef.current.clientWidth,
-      crosshair: { mode: CrosshairMode.Normal },
       layout: {
-        background: { color: 'transparent' },
-        textColor: '#0F172A',
+        background: { type: ColorType.Solid, color: "transparent" },
+        textColor: "#94a3b8",
+        fontSize: 11,
       },
       grid: {
-        vertLines: { visible: false },
-        horzLines: { visible: false },
+        vertLines: { color: "#f1f5f9" },
+        horzLines: { color: "#f1f5f9" },
       },
-      rightPriceScale: {
-        borderVisible: false,
-      },
-      timeScale: {
-        secondsVisible: false,
-        tickMarkFormatter: (time: UTCTimestamp) => {
-          const d = new Date((time as UTCTimestamp) * 1000);
-          return d.toLocaleTimeString('ko-KR', {
-            hour: '2-digit',
-            minute: '2-digit',
-          });
-        },
-      },
+      rightPriceScale: { borderColor: "#e2e8f0" },
+      timeScale: { borderColor: "#e2e8f0", timeVisible: true },
     });
 
     const series = chart.addSeries(CandlestickSeries, {
-      priceFormat: {
-        type: 'custom',
-        formatter: (price: number) =>
-          `${price.toLocaleString('ko-KR')}원`,
-      },
+      upColor: "#e11d48",       // 상승 = 빨강
+      downColor: "#1d4ed8",     // 하락 = 파랑
+      borderUpColor: "#e11d48",
+      borderDownColor: "#1d4ed8",
+      wickUpColor: "#e11d48",
+      wickDownColor: "#1d4ed8",
     });
 
-    chartRef.current = chart;
-    seriesRef.current = series;
+    series.setData(
+      candles.map((c) => ({
+        time: c.time as UTCTimestamp,
+        open: c.open,
+        high: c.high,
+        low: c.low,
+        close: c.close,
+      })),
+    );
 
-    const onResize = () => {
-      if (!containerRef.current || !chartRef.current) return;
-      chartRef.current.applyOptions({
-        width: containerRef.current.clientWidth,
-      });
-    };
-    window.addEventListener('resize', onResize);
+    chart.timeScale().fitContent();
+
+    const onResize = () => chart.applyOptions({ width: el.clientWidth });
+    window.addEventListener("resize", onResize);
 
     return () => {
-      window.removeEventListener('resize', onResize);
+      window.removeEventListener("resize", onResize);
       chart.remove();
-      chartRef.current = null;
-      seriesRef.current = null;
     };
-  }, [height]);
+  }, [candles, height]);
 
-  useEffect(() => {
-    if (!seriesRef.current) return;
-    seriesRef.current.setData(chartData);
-    chartRef.current?.timeScale().fitContent();
-  }, [chartData]);
-
-  return (
-    <div className={className ?? "w-full rounded-2xl border border-slate-200/70 bg-white p-3 shadow-sm"}>
-      <div ref={containerRef} className="w-full" />
-    </div>
-  );
+  return <div ref={containerRef} className="w-full" />;
 }

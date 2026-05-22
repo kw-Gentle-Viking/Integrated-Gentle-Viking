@@ -7,12 +7,15 @@ import {
   FiFileText,
   FiHeart,
   FiRefreshCw,
+  FiShoppingBag,
   FiTrendingUp,
   FiX,
   FiZap,
 } from "react-icons/fi";
 import { IoSparkles } from "react-icons/io5";
 import { AUTH_EVENT_NAME, getCurrentUser } from "@/lib/signup/auth";
+import { useStockList } from "@/lib/stock-list/StockListContext";
+import CartConfirmModal from "@/components/stock-list/CartConfirmModal";
 
 type ReasonKey = "news" | "disclosure" | "flow";
 
@@ -243,8 +246,9 @@ function DetailChart({ stock }: { stock: ReportStock }) {
 }
 
 export default function AIReportPage() {
-  const [favoriteCodes, setFavoriteCodes] = useState<string[]>([]);
+  const { toggleFavorite, toggleCart, isFavorite, isInCart } = useStockList();
   const [selectedStock, setSelectedStock] = useState<ReportStock | null>(null);
+  const [pendingCart, setPendingCart] = useState<{ code: string; name: string } | null>(null);
   const [refreshedAt, setRefreshedAt] = useState("09:30");
   const [nickname, setNickname] = useState("회원");
   const [isGenerating, setIsGenerating] = useState(false);
@@ -266,13 +270,6 @@ export default function AIReportPage() {
     };
   }, []);
 
-  const toggleFavorite = (code: string) => {
-    setFavoriteCodes((current) =>
-      current.includes(code)
-        ? current.filter((item) => item !== code)
-        : [...current, code],
-    );
-  };
 
   const refreshReport = () => {
     setIsGenerating(true);
@@ -332,7 +329,7 @@ export default function AIReportPage() {
           모델 기준 시각 {refreshedAt}
         </div>
         <p className="text-xs font-bold text-slate-400">
-          하트를 누르면 관심 종목 후보에 저장됩니다.
+          하트는 관심 종목, 가방은 포트폴리오에 저장됩니다.
         </p>
       </div>
 
@@ -357,14 +354,12 @@ export default function AIReportPage() {
       ) : (
         <div className="mt-6 space-y-4">
           {displayedStocks.map((stock) => {
-            const isFavorite = favoriteCodes.includes(stock.code);
 
             return (
-              <button
+              <div
                 key={stock.code}
-                type="button"
                 onClick={() => setSelectedStock(stock)}
-                className="block w-full rounded-2xl border border-slate-100 bg-white p-5 text-left shadow-[0_12px_32px_rgba(15,23,42,0.04)] transition hover:border-[#5267ff]/30 hover:shadow-[0_18px_44px_rgba(15,23,42,0.08)]"
+                className="block w-full cursor-pointer rounded-2xl border border-slate-100 bg-white p-5 text-left shadow-[0_12px_32px_rgba(15,23,42,0.04)] transition hover:border-[#5267ff]/30 hover:shadow-[0_18px_44px_rgba(15,23,42,0.08)]"
               >
                 <div>
                   <div className="flex flex-wrap items-start justify-between gap-4">
@@ -406,14 +401,29 @@ export default function AIReportPage() {
                         }}
                         title="관심 종목에 추가"
                         className={`flex h-10 w-10 items-center justify-center rounded-xl border transition ${
-                          isFavorite
+                          isFavorite(stock.code)
                             ? "border-rose-100 bg-rose-50 text-rose-500"
                             : "border-slate-200 text-slate-400 hover:border-rose-100 hover:bg-rose-50 hover:text-rose-500"
                         }`}
                       >
                         <FiHeart
-                          className={`h-5 w-5 ${isFavorite ? "fill-current" : ""}`}
+                          className={`h-5 w-5 ${isFavorite(stock.code) ? "fill-current" : ""}`}
                         />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setPendingCart({ code: stock.code, name: stock.name });
+                        }}
+                        title="포트폴리오에 추가"
+                        className={`flex h-10 w-10 items-center justify-center rounded-xl border transition ${
+                          isInCart(stock.code)
+                            ? "border-amber-200 bg-amber-50 text-amber-500"
+                            : "border-slate-200 text-slate-400 hover:border-amber-200 hover:bg-amber-50 hover:text-amber-500"
+                        }`}
+                      >
+                        <FiShoppingBag className="h-5 w-5" />
                       </button>
                       <Link
                         href={`/ai-report/predict?code=${stock.code}`}
@@ -453,10 +463,19 @@ export default function AIReportPage() {
                     </div>
                   </div>
                 </div>
-              </button>
+              </div>
             );
           })}
         </div>
+      )}
+
+      {pendingCart && (
+        <CartConfirmModal
+          stockName={pendingCart.name}
+          mode={isInCart(pendingCart.code) ? "remove" : "add"}
+          onConfirm={() => { toggleCart(pendingCart.code); setPendingCart(null); }}
+          onCancel={() => setPendingCart(null)}
+        />
       )}
 
       {selectedStock ? (
