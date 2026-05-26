@@ -1,9 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import Link from "next/link";
 import {
   FiActivity,
+  FiExternalLink,
   FiFileText,
   FiHeart,
   FiRefreshCw,
@@ -13,16 +15,57 @@ import {
   FiZap,
 } from "react-icons/fi";
 import { IoSparkles } from "react-icons/io5";
-import { AUTH_EVENT_NAME, getCurrentUser } from "@/lib/signup/auth";
-import { useStockList } from "@/lib/stock-list/StockListContext";
+import { AUTH_EVENT_NAME, apiFetch, getCurrentUser } from "@/lib/signup/auth";
+import { StockListItem, useStockList } from "@/lib/stock-list/StockListContext";
 import CartConfirmModal from "@/components/stock-list/CartConfirmModal";
 
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+const REPORT_CACHE_PREFIX = "gv-ai-report";
+const REPORT_CACHE_VERSION = 4;
+const DAILY_REPORT_HOUR = 8;
+const DAILY_REPORT_MINUTE = 30;
+
 type ReasonKey = "news" | "disclosure" | "flow";
+
+type ReportSource = string | {
+  label?: string;
+  title?: string;
+  url?: string;
+  href?: string;
+};
 
 type GeminiReason = {
   summary: string;
   details: string;
-  sources: string[];
+  sources: ReportSource[];
+};
+
+type BackendReason = {
+  title?: string;
+  headline?: string;
+  details?: string;
+  sources?: ReportSource[];
+  tags?: string[];
+};
+
+type BackendRecommendation = {
+  rank?: number;
+  ticker?: string;
+  name?: string;
+  recommendationScore?: number;
+  currentPrice?: number;
+  changeRate?: number;
+  summary?: string;
+  strategy?: string;
+  reasons?: {
+    news?: BackendReason;
+    disclosure?: BackendReason;
+    materialFlow?: BackendReason;
+  };
+};
+
+type BackendReport = {
+  recommendations?: BackendRecommendation[];
 };
 
 type ReportStock = {
@@ -34,10 +77,31 @@ type ReportStock = {
   change: string;
   signal: string;
   score: number;
+  summary: string;
   reasons: Record<ReasonKey, GeminiReason>;
 };
 
-const reportStocks: ReportStock[] = [
+type CachedReport = {
+  version?: number;
+  slotKey: string;
+  generatedAt: string;
+  refreshedAt: string;
+  stocks: ReportStock[];
+};
+
+function getSourceHref(source: ReportSource) {
+  const href = typeof source === "string" ? source.trim() : (source.url || source.href || "").trim();
+  if (/^https?:\/\//i.test(href)) return href;
+  if (/^www\./i.test(href)) return `https://${href}`;
+  return null;
+}
+
+function getSourceLabel(source: ReportSource) {
+  if (typeof source === "string") return source;
+  return source.label || source.title || source.url || source.href || "출처";
+}
+
+const fallbackReportStocks: ReportStock[] = [
   {
     rank: 1,
     name: "삼성전자",
@@ -47,6 +111,7 @@ const reportStocks: ReportStock[] = [
     change: "+0.61%",
     signal: "메모리 반등",
     score: 86,
+    summary: "메모리 반등 흐름이 확인되며, 뉴스와 수급 근거가 동시에 점수를 끌어올렸습니다.",
     reasons: {
       news: {
         summary: "HBM 공급 확대 기대와 외국인 순매수 유입이 함께 확인됐습니다.",
@@ -79,6 +144,7 @@ const reportStocks: ReportStock[] = [
     change: "-1.25%",
     signal: "HBM 모멘텀",
     score: 81,
+    summary: "AI 서버 투자 확대와 HBM 모멘텀이 유지되지만 단기 차익실현도 함께 확인됩니다.",
     reasons: {
       news: {
         summary:
@@ -112,6 +178,7 @@ const reportStocks: ReportStock[] = [
     change: "+2.10%",
     signal: "AI 서비스 재료",
     score: 77,
+    summary: "AI 서비스와 커머스 개선 기대가 플랫폼주 반등 재료로 작용했습니다.",
     reasons: {
       news: {
         summary:
@@ -143,6 +210,7 @@ const reportStocks: ReportStock[] = [
     change: "+2.08%",
     signal: "배터리 수요 회복",
     score: 73,
+    summary: "전기차 수요 회복 기대와 원재료 가격 안정이 투자심리를 개선했습니다.",
     reasons: {
       news: {
         summary:
@@ -175,6 +243,7 @@ const reportStocks: ReportStock[] = [
     change: "+0.84%",
     signal: "환율 수혜",
     score: 69,
+    summary: "환율과 수출주 민감도가 다시 부각되며 안정적인 하방 방어 수급이 확인됩니다.",
     reasons: {
       news: {
         summary:
@@ -203,44 +272,219 @@ const reasonCards = [
   { key: "flow", label: "재료/수급", icon: FiTrendingUp },
 ] as const;
 
+function formatPrice(value?: number) {
+  if (typeof value !== "number" || Number.isNaN(value)) return "-";
+  return `${value.toLocaleString("ko-KR")}원`;
+}
+
+function formatChange(value?: number) {
+  if (typeof value !== "number" || Number.isNaN(value)) return "-";
+  return `${value > 0 ? "+" : ""}${value.toFixed(2)}%`;
+}
+
+function makeLogoText(name: string) {
+  return name.trim().slice(0, 1) || "?";
+}
+
+function mapReason(reason?: BackendReason): GeminiReason {
+  const sources = reason?.sources?.filter(Boolean) ?? [];
+  return {
+    summary: reason?.headline || "확인된 데이터가 아직 없습니다.",
+    details: reason?.details || "추가 데이터가 들어오면 상세 근거를 표시합니다.",
+    sources: sources.length > 0 ? sources : reason?.tags ?? [reason?.title || "데이터"],
+  };
+}
+
+function mapReportStock(item: BackendRecommendation, index: number): ReportStock {
+  const name = item.name || "종목명 없음";
+  const signal = item.strategy || item.reasons?.news?.tags?.[0] || "AI 추천";
+  return {
+    rank: item.rank ?? index + 1,
+    name,
+    code: item.ticker || "",
+    logoText: makeLogoText(name),
+    price: formatPrice(item.currentPrice),
+    change: formatChange(item.changeRate),
+    signal,
+    score: item.recommendationScore ?? 0,
+    summary: item.summary || "뉴스, 공시, 재료와 수급 근거를 종합해 산출한 추천입니다.",
+    reasons: {
+      news: mapReason(item.reasons?.news),
+      disclosure: mapReason(item.reasons?.disclosure),
+      flow: mapReason(item.reasons?.materialFlow),
+    },
+  };
+}
+
+function parseRecommendationReport(report: unknown): ReportStock[] {
+  const parsed = typeof report === "string" ? JSON.parse(report) as BackendReport : report as BackendReport;
+  return (parsed.recommendations ?? []).map(mapReportStock);
+}
+
+function getReportSlot(now = new Date()) {
+  const scheduledAt = new Date(now);
+  scheduledAt.setHours(DAILY_REPORT_HOUR, DAILY_REPORT_MINUTE, 0, 0);
+
+  if (now < scheduledAt) {
+    scheduledAt.setDate(scheduledAt.getDate() - 1);
+  }
+
+  const year = scheduledAt.getFullYear();
+  const month = String(scheduledAt.getMonth() + 1).padStart(2, "0");
+  const day = String(scheduledAt.getDate()).padStart(2, "0");
+
+  return {
+    key: `${year}-${month}-${day}-0830`,
+    scheduledAt,
+  };
+}
+
+function formatReportTime(date: Date) {
+  return date.toLocaleTimeString("ko-KR", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+}
+
+function getReportCacheKey(userId: string) {
+  return `${REPORT_CACHE_PREFIX}:${userId}`;
+}
+
+function readCachedReport(userId: string, slotKey: string): CachedReport | null {
+  if (typeof window === "undefined") return null;
+
+  try {
+    const rawCache = window.localStorage.getItem(getReportCacheKey(userId));
+    if (!rawCache) return null;
+
+    const cache = JSON.parse(rawCache) as CachedReport;
+    if (cache.version !== REPORT_CACHE_VERSION) return null;
+    if (cache.slotKey !== slotKey || !Array.isArray(cache.stocks)) return null;
+    if (cache.stocks.length === 0) return null;
+
+    return cache;
+  } catch {
+    return null;
+  }
+}
+
+function writeCachedReport(userId: string, cache: CachedReport) {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(getReportCacheKey(userId), JSON.stringify(cache));
+}
+
+function getPredictHref(stock: ReportStock) {
+  const params = new URLSearchParams({
+    code: stock.code,
+    name: stock.name,
+    price: stock.price,
+    change: stock.change,
+  });
+
+  return `/ai-report/predict?${params.toString()}`;
+}
+
+const chartRanges = [
+  { key: "1D", label: "1일", count: 31, weight: 0.8 },
+  { key: "1W", label: "1주", count: 44, weight: 1 },
+  { key: "3M", label: "3달", count: 52, weight: 1.12 },
+  { key: "1Y", label: "1년", count: 60, weight: 1.24 },
+  { key: "5Y", label: "5년", count: 68, weight: 1.38 },
+  { key: "ALL", label: "전체", count: 76, weight: 1.52 },
+] as const;
+
+type ChartRangeKey = (typeof chartRanges)[number]["key"];
+
+function makeCandleSeries(isDown: boolean, rangeKey: ChartRangeKey) {
+  const range = chartRanges.find((item) => item.key === rangeKey) ?? chartRanges[0];
+  const xStep = 500 / Math.max(range.count - 1, 1);
+  const base = isDown ? 172 : 198;
+  const direction = isDown ? 1 : -1;
+  const rangeWeight = range.weight;
+
+  return Array.from({ length: range.count }, (_, index) => {
+    const x = Math.round(index * xStep);
+    const trend = direction * index * 2.2 * rangeWeight;
+    const wave = Math.sin(index * 0.82) * 18 + Math.cos(index * 0.33) * 9;
+    const impulse = index > range.count * 0.78 ? direction * -34 : 0;
+    const open = Math.max(30, Math.min(226, base + trend + wave + impulse));
+    const closeShift = Math.sin(index * 1.35 + (isDown ? 0.4 : 1.1)) * 18 + direction * 2;
+    const close = Math.max(28, Math.min(230, open + closeShift));
+    const high = Math.max(16, Math.min(open, close) - (10 + (index % 5) * 4));
+    const low = Math.min(244, Math.max(open, close) + (12 + (index % 4) * 5));
+
+    return { x, open, high, low, close };
+  });
+}
+
 function DetailChart({ stock }: { stock: ReportStock }) {
-  const points = stock.change.startsWith("-")
-    ? "M0 54 C55 42 84 58 128 49 C176 38 216 70 268 66 C326 62 364 84 420 76"
-    : "M0 82 C48 76 84 88 126 68 C176 44 214 58 266 38 C316 18 362 28 420 12";
-  const fill = `${points} L 420 116 L 0 116 Z`;
-  const color = stock.change.startsWith("-") ? "#60a5fa" : "#fb7185";
+  const [chartRange, setChartRange] = useState<ChartRangeKey>("1D");
+  const isDown = stock.change.startsWith("-");
+  const candles = makeCandleSeries(isDown, chartRange);
 
   return (
-    <div className="relative h-40 overflow-hidden rounded-2xl bg-white p-4 ring-1 ring-slate-100">
-      <div className="pointer-events-none absolute inset-x-4 top-1/3 h-px bg-slate-100" />
-      <div className="pointer-events-none absolute inset-x-4 bottom-1/3 h-px bg-slate-100" />
-      <svg
-        viewBox="0 0 420 120"
-        className="absolute inset-0 h-full w-full"
-        aria-hidden="true"
-      >
-        <defs>
-          <linearGradient
-            id={`detailFill-${stock.code}`}
-            x1="0"
-            x2="0"
-            y1="0"
-            y2="1"
+    <div className="overflow-hidden rounded-2xl bg-white ring-1 ring-slate-100">
+      <div className="flex flex-wrap items-center justify-end gap-1 border-b border-slate-100 bg-slate-50/70 px-3 py-2">
+        {chartRanges.map((range) => (
+          <button
+            key={range.key}
+            type="button"
+            onClick={() => setChartRange(range.key)}
+            className={`h-8 rounded-lg px-3 text-xs font-black transition ${
+              chartRange === range.key
+                ? "bg-slate-200 text-slate-700 shadow-sm"
+                : "text-slate-400 hover:bg-white hover:text-slate-700"
+            }`}
           >
-            <stop offset="0%" stopColor={color} stopOpacity="0.22" />
-            <stop offset="100%" stopColor={color} stopOpacity="0" />
-          </linearGradient>
-        </defs>
-        <path d={fill} fill={`url(#detailFill-${stock.code})`} />
-        <path
-          d={points}
-          fill="none"
-          stroke={color}
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          strokeWidth="4"
-        />
-      </svg>
+            {range.label}
+          </button>
+        ))}
+      </div>
+      <div className="relative h-64 overflow-hidden bg-white">
+        <svg
+          viewBox="0 0 500 267"
+          preserveAspectRatio="none"
+          className="absolute inset-0 h-full w-full"
+          aria-hidden="true"
+        >
+          <rect width="500" height="267" fill="#ffffff" />
+          {[0, 92, 227, 362, 497].map((x) => (
+            <line key={x} x1={x} x2={x} y1="0" y2="267" stroke="#e9eef5" strokeWidth="1" />
+          ))}
+          {[34, 84, 132, 180, 228].map((y) => (
+            <line key={y} x1="0" x2="500" y1={y} y2={y} stroke="#e9eef5" strokeWidth="1" />
+          ))}
+          <line x1="0" x2="500" y1="120" y2="120" stroke="#f43f5e" strokeDasharray="2 3" strokeWidth="1.2" />
+          {candles.map((candle) => {
+            const rising = candle.close < candle.open;
+            const color = rising ? "#e8294f" : "#2459d6";
+            const bodyY = Math.min(candle.open, candle.close);
+            const bodyHeight = Math.max(Math.abs(candle.close - candle.open), 2);
+            const candleWidth = chartRange === "1D" ? 11 : chartRange === "1W" ? 8 : chartRange === "3M" ? 7 : 5;
+
+            return (
+              <g key={candle.x}>
+                <line
+                  x1={candle.x}
+                  x2={candle.x}
+                  y1={candle.high}
+                  y2={candle.low}
+                  stroke={color}
+                  strokeWidth="1.2"
+                />
+                <rect
+                  x={candle.x - candleWidth / 2}
+                  y={bodyY}
+                  width={candleWidth}
+                  height={bodyHeight}
+                  fill={color}
+                />
+              </g>
+            );
+          })}
+        </svg>
+      </div>
     </div>
   );
 }
@@ -248,15 +492,18 @@ function DetailChart({ stock }: { stock: ReportStock }) {
 export default function AIReportPage() {
   const { toggleFavorite, toggleCart, isFavorite, isInCart } = useStockList();
   const [selectedStock, setSelectedStock] = useState<ReportStock | null>(null);
-  const [pendingCart, setPendingCart] = useState<{ code: string; name: string } | null>(null);
+  const [pendingCart, setPendingCart] = useState<StockListItem | null>(null);
   const [refreshedAt, setRefreshedAt] = useState("09:30");
+  const [userId, setUserId] = useState<string | null>(null);
   const [nickname, setNickname] = useState("회원");
   const [isGenerating, setIsGenerating] = useState(false);
-  const [reportVersion, setReportVersion] = useState(0);
+  const [stocks, setStocks] = useState<ReportStock[]>(fallbackReportStocks);
+  const [reportError, setReportError] = useState<string | null>(null);
 
   useEffect(() => {
     const syncUser = () => {
       const user = getCurrentUser();
+      setUserId(user?.id ?? user?.email ?? "guest");
       setNickname(user?.nickname ?? "회원");
     };
 
@@ -270,30 +517,83 @@ export default function AIReportPage() {
     };
   }, []);
 
+  const loadReport = useCallback(async ({ force = false } = {}) => {
+    if (!userId) return;
 
-  const refreshReport = () => {
+    const slot = getReportSlot();
+    const cachedReport = readCachedReport(userId, slot.key);
+
+    if (!force && cachedReport) {
+      setSelectedStock(null);
+      setReportError(null);
+      setStocks(cachedReport.stocks);
+      setRefreshedAt(cachedReport.refreshedAt);
+      return;
+    }
+
     setIsGenerating(true);
     setSelectedStock(null);
+    setReportError(null);
 
-    window.setTimeout(() => {
-      const now = new Date();
-      setRefreshedAt(
-        now.toLocaleTimeString("ko-KR", {
-          hour: "2-digit",
-          minute: "2-digit",
-          hour12: false,
-        }),
+    try {
+      const res = await apiFetch(`${API_BASE}/recommendation`, {
+        headers: { Accept: "application/json" },
+      });
+
+      if (!res.ok) {
+        throw new Error(`추천 리포트 요청 실패 (${res.status})`);
+      }
+
+      const payload = (await res.json()) as { report?: unknown; timestamp?: string };
+      const nextStocks = parseRecommendationReport(payload.report);
+
+      if (nextStocks.length === 0) {
+        throw new Error("추천 종목이 비어 있습니다.");
+      }
+
+      setStocks(nextStocks);
+      const reportTime = payload.timestamp ? new Date(payload.timestamp) : new Date();
+      const displayTime = force ? reportTime : slot.scheduledAt;
+      const refreshedTime = formatReportTime(displayTime);
+      setRefreshedAt(refreshedTime);
+      writeCachedReport(userId, {
+        version: REPORT_CACHE_VERSION,
+        slotKey: slot.key,
+        generatedAt: reportTime.toISOString(),
+        refreshedAt: refreshedTime,
+        stocks: nextStocks,
+      });
+    } catch (error) {
+      console.error(error);
+      setReportError(
+        error instanceof Error
+          ? error.message
+          : "추천 리포트를 불러오지 못했습니다.",
       );
-      setReportVersion((current) => current + 1);
+      setStocks(fallbackReportStocks);
+    } finally {
       setIsGenerating(false);
-    }, 1300);
+    }
+  }, [userId]);
+
+  useEffect(() => {
+    void loadReport();
+  }, [loadReport]);
+
+  const refreshReport = () => {
+    void loadReport({ force: true });
   };
 
-  const rotatedStocks = reportVersion % reportStocks.length;
-  const displayedStocks = [
-    ...reportStocks.slice(rotatedStocks),
-    ...reportStocks.slice(0, rotatedStocks),
-  ].map((stock, index) => ({ ...stock, rank: index + 1 }));
+  const displayedStocks = stocks.map((stock, index) => ({ ...stock, rank: index + 1 }));
+
+  const makeStockListItem = (stock: ReportStock): StockListItem => ({
+    code: stock.code,
+    name: stock.name,
+    price: stock.price,
+    change: stock.change,
+    logoText: stock.logoText,
+    memo: stock.summary,
+  });
 
   return (
     <section className="rounded-2xl bg-white p-6 shadow-[0_24px_80px_rgba(15,23,42,0.06)] lg:p-8">
@@ -314,7 +614,7 @@ export default function AIReportPage() {
           type="button"
           onClick={refreshReport}
           disabled={isGenerating}
-          className="flex h-11 items-center gap-2 rounded-full bg-slate-950 px-5 text-sm font-black text-white transition hover:bg-slate-800"
+          className="flex h-11 items-center gap-2 rounded-full border border-slate-200 bg-slate-100 px-5 text-sm font-black text-slate-600 transition hover:border-slate-300 hover:bg-slate-200 hover:text-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
         >
           <FiRefreshCw
             className={`h-4 w-4 ${isGenerating ? "animate-spin" : ""}`}
@@ -332,6 +632,12 @@ export default function AIReportPage() {
           하트는 관심 종목, 가방은 포트폴리오에 저장됩니다.
         </p>
       </div>
+
+      {reportError ? (
+        <div className="mt-5 rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3 text-sm font-bold text-amber-700">
+          {reportError} 기존 예시 리포트를 표시합니다.
+        </div>
+      ) : null}
 
       {isGenerating ? (
         <div className="mt-6 flex min-h-[520px] items-center justify-center rounded-2xl bg-[#f4f7ff] p-8">
@@ -397,7 +703,7 @@ export default function AIReportPage() {
                         type="button"
                         onClick={(event) => {
                           event.stopPropagation();
-                          toggleFavorite(stock.code);
+                          toggleFavorite(stock.code, makeStockListItem(stock));
                         }}
                         title="관심 종목에 추가"
                         className={`flex h-10 w-10 items-center justify-center rounded-xl border transition ${
@@ -414,7 +720,7 @@ export default function AIReportPage() {
                         type="button"
                         onClick={(event) => {
                           event.stopPropagation();
-                          setPendingCart({ code: stock.code, name: stock.name });
+                          setPendingCart(makeStockListItem(stock));
                         }}
                         title="포트폴리오에 추가"
                         className={`flex h-10 w-10 items-center justify-center rounded-xl border transition ${
@@ -426,12 +732,14 @@ export default function AIReportPage() {
                         <FiShoppingBag className="h-5 w-5" />
                       </button>
                       <Link
-                        href={`/ai-report/predict?code=${stock.code}`}
+                        href={getPredictHref(stock)}
                         onClick={(event) => event.stopPropagation()}
-                        className="flex h-10 items-center gap-2 rounded-xl bg-[#5267ff] px-4 text-sm font-black text-white transition hover:bg-[#4054df]"
+                        className="flex h-10 items-center gap-2 rounded-xl border border-indigo-100 bg-gradient-to-r from-indigo-50 via-fuchsia-50 to-rose-50 px-4 text-sm font-black shadow-sm transition hover:border-indigo-200 hover:from-indigo-100 hover:via-fuchsia-100 hover:to-rose-100"
                       >
-                        <FiActivity className="h-4 w-4" />
-                        AI 예측하기
+                        <FiActivity className="h-4 w-4 text-[#5267ff]" />
+                        <span className="bg-gradient-to-r from-[#5267ff] via-fuchsia-500 to-rose-500 bg-clip-text text-transparent">
+                          AI 매매 확률 보기
+                        </span>
                       </Link>
                     </div>
                   </div>
@@ -473,127 +781,150 @@ export default function AIReportPage() {
         <CartConfirmModal
           stockName={pendingCart.name}
           mode={isInCart(pendingCart.code) ? "remove" : "add"}
-          onConfirm={() => { toggleCart(pendingCart.code); setPendingCart(null); }}
+          onConfirm={() => { toggleCart(pendingCart.code, pendingCart); setPendingCart(null); }}
           onCancel={() => setPendingCart(null)}
         />
       )}
 
-      {selectedStock ? (
-        <div className="fixed inset-0 z-50 flex justify-end bg-slate-950/35 backdrop-blur-sm">
+      {selectedStock && typeof document !== "undefined" ? createPortal(
+        <div className="fixed inset-0 z-[100] flex min-h-dvh items-start justify-center overflow-y-auto bg-slate-950/35 p-4 py-6 backdrop-blur-sm sm:items-center sm:p-6">
           <button
             type="button"
             aria-label="상세 패널 닫기"
             className="absolute inset-0 cursor-default"
             onClick={() => setSelectedStock(null)}
           />
-          <aside className="relative h-full w-full max-w-[520px] translate-x-0 overflow-y-auto bg-white p-6 shadow-[0_24px_80px_rgba(15,23,42,0.25)] animate-[slideInRight_0.28s_ease-out]">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <p className="text-sm font-bold text-[#5267ff]">Stock Detail</p>
-                <h2 className="mt-2 text-3xl font-black text-slate-950">
-                  {selectedStock.name}
-                </h2>
-                <div className="mt-2 flex items-center gap-2">
-                  <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-black text-slate-500">
-                    {selectedStock.code}
-                  </span>
-                  <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-black text-emerald-600">
-                    {selectedStock.signal}
-                  </span>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setSelectedStock(null)}
-                title="닫기"
-                className="flex h-10 w-10 items-center justify-center rounded-xl text-slate-400 transition hover:bg-slate-100 hover:text-slate-950"
-              >
-                <FiX className="h-5 w-5" />
-              </button>
-            </div>
-
-            <div className="mt-6">
-              <DetailChart stock={selectedStock} />
-            </div>
-
-            <div className="mt-5 grid grid-cols-3 gap-3">
-              <div className="rounded-2xl bg-slate-950 p-4 text-white">
-                <p className="text-xs font-bold text-slate-300">추천 점수</p>
-                <p className="mt-2 text-3xl font-black">
-                  {selectedStock.score}
-                </p>
-              </div>
-              <div className="rounded-2xl bg-slate-50 p-4">
-                <p className="text-xs font-bold text-slate-400">현재가</p>
-                <p className="mt-2 text-lg font-black text-slate-950">
-                  {selectedStock.price}
-                </p>
-              </div>
-              <div className="rounded-2xl bg-slate-50 p-4">
-                <p className="text-xs font-bold text-slate-400">등락률</p>
-                <p
-                  className={`mt-2 text-lg font-black ${selectedStock.change.startsWith("-") ? "text-blue-500" : "text-rose-500"}`}
-                >
-                  {selectedStock.change}
-                </p>
-              </div>
-            </div>
-
-            <section className="mt-5 rounded-2xl bg-[#f4f7ff] p-5">
-              <p className="text-xs font-black text-[#5267ff]">핵심 요약</p>
-              <p className="mt-3 text-lg font-black leading-8 text-slate-900">
-                {selectedStock.signal} 흐름이 확인되며, 뉴스와 수급 근거가
-                동시에 점수를 끌어올렸습니다.
-              </p>
-            </section>
-
-            <section className="mt-5 space-y-3">
-              <h3 className="text-lg font-black text-slate-950">핵심 데이터</h3>
-              {reasonCards.map((item) => {
-                const Icon = item.icon;
-                const reason = selectedStock.reasons[item.key];
-
-                return (
-                  <article
-                    key={item.key}
-                    className="rounded-2xl border border-slate-100 p-4"
-                  >
-                    <p className="flex items-center gap-2 text-sm font-black text-slate-700">
-                      <Icon className="h-4 w-4 text-[#5267ff]" />
-                      {item.label}
-                    </p>
-                    <p className="mt-2 text-sm font-bold leading-6 text-slate-700">
-                      {reason.summary}
-                    </p>
-                    <p className="mt-3 text-sm leading-6 text-slate-500">
-                      {reason.details}
-                    </p>
-                    <div className="mt-3 flex flex-wrap gap-1.5">
-                      {reason.sources.map((source) => (
-                        <span
-                          key={source}
-                          className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-bold text-slate-500"
-                        >
-                          {source}
-                        </span>
-                      ))}
+          <aside className="relative w-full max-w-[920px] overflow-hidden rounded-2xl bg-white shadow-[0_28px_90px_rgba(15,23,42,0.28)] animate-[modalSwoopIn_0.36s_cubic-bezier(0.16,1,0.3,1)]">
+            <div className="ai-report-detail-scroll max-h-[calc(100vh-32px)] overflow-y-auto sm:max-h-[calc(100vh-48px)]">
+              <div className="p-5 sm:p-6 lg:p-8">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="min-w-0">
+                    <p className="text-sm font-bold text-[#5267ff]">Stock Detail</p>
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <h2 className="break-keep text-3xl font-black text-slate-950">
+                        {selectedStock.name}
+                      </h2>
+                      <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-black text-slate-500">
+                        {selectedStock.code}
+                      </span>
+                      <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-black text-emerald-600">
+                        {selectedStock.signal}
+                      </span>
                     </div>
-                  </article>
-                );
-              })}
-            </section>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedStock(null)}
+                    title="닫기"
+                    className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-slate-400 transition hover:bg-slate-100 hover:text-slate-950"
+                  >
+                    <FiX className="h-5 w-5" />
+                  </button>
+                </div>
 
-            <div className="sticky bottom-0 mt-6 bg-white pb-1 pt-4">
-              <Link
-                href={`/ai-report/predict?code=${selectedStock.code}`}
-                className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-[#5267ff] text-sm font-black text-white transition hover:bg-[#4054df]"
-              >
-                <FiActivity className="h-4 w-4" />
-                AI 예측하기
-              </Link>
+                <div className="mt-6">
+                  <DetailChart stock={selectedStock} />
+                </div>
+
+                <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                  <div className="rounded-2xl bg-[#eef2ff] p-4 ring-1 ring-[#dfe5ff]">
+                    <p className="text-xs font-bold text-[#5267ff]">추천 점수</p>
+                    <p className="mt-2 text-3xl font-black text-slate-950">
+                      {selectedStock.score}
+                    </p>
+                  </div>
+                  <div className="rounded-2xl bg-slate-50 p-4">
+                    <p className="text-xs font-bold text-slate-400">현재가</p>
+                    <p className="mt-2 text-lg font-black text-slate-950">
+                      {selectedStock.price}
+                    </p>
+                  </div>
+                  <div className="rounded-2xl bg-slate-50 p-4">
+                    <p className="text-xs font-bold text-slate-400">등락률</p>
+                    <p
+                      className={"mt-2 text-lg font-black " + (selectedStock.change.startsWith("-") ? "text-blue-500" : "text-rose-500")}
+                    >
+                      {selectedStock.change}
+                    </p>
+                  </div>
+                </div>
+
+                <section className="mt-5 rounded-2xl bg-[#f4f7ff] p-5">
+                  <p className="text-xs font-black text-[#5267ff]">핵심 요약</p>
+                  <p className="mt-3 text-lg font-black leading-8 text-slate-900">
+                    {selectedStock.summary}
+                  </p>
+                </section>
+
+                <section className="mt-5 space-y-3">
+                  <h3 className="text-lg font-black text-slate-950">핵심 데이터</h3>
+                  {reasonCards.map((item) => {
+                    const Icon = item.icon;
+                    const reason = selectedStock.reasons[item.key];
+
+                    return (
+                      <article
+                        key={item.key}
+                        className="rounded-2xl border border-slate-100 p-4"
+                      >
+                        <p className="flex items-center gap-2 text-sm font-black text-slate-700">
+                          <Icon className="h-4 w-4 text-[#5267ff]" />
+                          {item.label}
+                        </p>
+                        <p className="mt-2 text-sm font-bold leading-6 text-slate-700">
+                          {reason.summary}
+                        </p>
+                        <p className="mt-3 text-sm leading-6 text-slate-500">
+                          {reason.details}
+                        </p>
+                        <div className="mt-3 flex flex-wrap items-center gap-1.5">
+                          {reason.sources.map((source) => {
+                            const href = getSourceHref(source);
+
+                            return (
+                              <div
+                                key={getSourceLabel(source) + "-" + (href ?? "text")}
+                                className="flex items-center gap-1.5 rounded-full bg-slate-100 px-2 py-1"
+                              >
+                                <span className="text-[11px] font-bold text-slate-500">
+                                  {getSourceLabel(source)}
+                                </span>
+                                {href ? (
+                                  <a
+                                    href={href}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="inline-flex h-5 w-5 items-center justify-center rounded-full text-slate-400 transition hover:bg-white hover:text-[#5267ff]"
+                                    aria-label={getSourceLabel(source) + " 링크 열기"}
+                                  >
+                                    <FiExternalLink className="h-3.5 w-3.5" />
+                                  </a>
+                                ) : null}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </article>
+                    );
+                  })}
+                </section>
+              </div>
+
+              <div className="sticky bottom-0 border-t border-slate-100 bg-white/95 px-5 py-4 backdrop-blur sm:px-6 lg:px-8">
+                <Link
+                  href={getPredictHref(selectedStock)}
+                  className="flex h-12 w-full items-center justify-center gap-2 rounded-xl border border-indigo-100 bg-gradient-to-r from-indigo-50 via-fuchsia-50 to-rose-50 text-sm font-black shadow-sm transition hover:border-indigo-200 hover:from-indigo-100 hover:via-fuchsia-100 hover:to-rose-100"
+                >
+                  <FiActivity className="h-4 w-4 text-[#5267ff]" />
+                  <span className="bg-gradient-to-r from-[#5267ff] via-fuchsia-500 to-rose-500 bg-clip-text text-transparent">
+                    AI 매매 확률 보기
+                  </span>
+                </Link>
+              </div>
             </div>
           </aside>
-        </div>
+        </div>,
+        document.body,
       ) : null}
     </section>
   );

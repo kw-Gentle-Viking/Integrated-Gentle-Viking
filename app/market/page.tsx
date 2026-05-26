@@ -48,6 +48,14 @@ function StockRow({ stock }: { stock: (typeof mockPopularStocks)[number] }) {
   const [pendingCart, setPendingCart] = useState(false);
   const candles = useMemo(() => generateMockCandles(stock.name), [stock.name]);
   const { toggleFavorite, toggleCart, isFavorite, isInCart } = useStockList();
+  const stockListItem = {
+    code: stock.code,
+    name: stock.name,
+    price: stock.price,
+    change: stock.change,
+    logoText: stock.name.slice(0, 1),
+    memo: `실시간 랭킹 ${stock.rank}위, 거래대금 ${stock.volume}`,
+  };
 
   return (
     <div>
@@ -55,7 +63,7 @@ function StockRow({ stock }: { stock: (typeof mockPopularStocks)[number] }) {
         <CartConfirmModal
           stockName={stock.name}
           mode={isInCart(stock.code) ? "remove" : "add"}
-          onConfirm={() => { toggleCart(stock.code); setPendingCart(false); }}
+          onConfirm={() => { toggleCart(stock.code, stockListItem); setPendingCart(false); }}
           onCancel={() => setPendingCart(false)}
         />
       )}
@@ -83,7 +91,7 @@ function StockRow({ stock }: { stock: (typeof mockPopularStocks)[number] }) {
         </p>
         <button
           type="button"
-          onClick={(e) => { e.stopPropagation(); toggleFavorite(stock.code); }}
+          onClick={(e) => { e.stopPropagation(); toggleFavorite(stock.code, stockListItem); }}
           title="관심 종목에 추가"
           className={`flex h-7 w-7 items-center justify-center rounded-lg border transition ${
             isFavorite(stock.code)

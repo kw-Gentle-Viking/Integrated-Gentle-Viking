@@ -57,11 +57,6 @@ const floatingSignals = [
   },
 ];
 
-const candidates = [
-  { name: "삼성전자", theme: "bg-sky-500", score: "83", tag: "관찰 우선" },
-  { name: "SK하이닉스", theme: "bg-violet-500", score: "76", tag: "뉴스 변화" },
-  { name: "카카오", theme: "bg-emerald-500", score: "71", tag: "가격 흐름" },
-];
 
 const workflowCards = [
   {
@@ -225,9 +220,9 @@ export default function LandingPage() {
         </div>
 
         <div className="landing-preview landing-enter landing-enter-5 absolute inset-x-5 top-[560px] z-20 mx-auto max-w-[1080px] sm:top-[585px] lg:top-[610px]">
-          <div className="overflow-hidden rounded-[24px] border border-white/80 bg-white shadow-[0_35px_100px_rgba(30,41,59,0.18)]">
-            <div className="dashboard-intake pointer-events-none absolute left-1/2 top-[-18px] h-10 w-28 -translate-x-1/2 rounded-full bg-indigo-400/20 blur-xl" />
-            <div className="flex h-14 items-center justify-between border-b border-slate-100 px-5">
+          <div className="overflow-hidden rounded-[24px] border border-white/80 bg-[#f8fafc] shadow-[0_35px_100px_rgba(30,41,59,0.18)]">
+            <div className="dashboard-intake pointer-events-none absolute left-1/2 top-[-18px] h-10 w-28 -translate-x-1/2 rounded-full bg-sky-300/25 blur-xl" />
+            <div className="flex h-14 items-center justify-between border-b border-slate-200/70 bg-white/90 px-5 backdrop-blur">
               <div className="flex items-center gap-2">
                 <span className="h-3 w-3 rounded-full bg-rose-300" />
                 <span className="h-3 w-3 rounded-full bg-amber-300" />
@@ -239,21 +234,22 @@ export default function LandingPage() {
               </div>
             </div>
 
-            <div className="grid min-h-[430px] bg-slate-50/60 lg:grid-cols-[220px_1fr]">
-              <aside className="hidden border-r border-slate-100 bg-white p-5 lg:block">
-                <p className="text-sm font-black">Genvi</p>
-                <div className="mt-8 space-y-2 text-xs font-bold">
-                  {[
-                    "Dashboard",
-                    "Daily Picks",
-                    "AI Report",
-                    "Auto Trading",
-                  ].map((item, index) => (
+            <div className="grid min-h-[500px] bg-[#f8fafc] lg:grid-cols-[190px_1fr]">
+              <aside className="hidden border-r border-slate-200/70 bg-[#f6f8fc] p-5 lg:block">
+                <Image
+                  src="/genvi.png"
+                  alt="Genvi"
+                  width={96}
+                  height={48}
+                  className="h-10 w-auto object-contain"
+                />
+                <div className="mt-7 space-y-2 text-xs font-bold">
+                  {["홈", "AI 리포트", "내 주식보기", "관심 종목", "마이페이지"].map((item, index) => (
                     <div
                       key={item}
-                      className={`rounded-xl px-3 py-3 ${
+                      className={`rounded-lg px-3 py-2.5 ${
                         index === 0
-                          ? "bg-indigo-50 text-indigo-700"
+                          ? "bg-white/55 text-slate-700 shadow-[0_14px_34px_rgba(15,23,42,0.13)] ring-1 ring-white/70 backdrop-blur-md"
                           : "text-slate-400"
                       }`}
                     >
@@ -263,77 +259,179 @@ export default function LandingPage() {
                 </div>
               </aside>
 
-              <div className="p-5 sm:p-7">
-                <div className="flex flex-wrap items-center justify-between gap-4">
-                  <div>
-                    <p className="text-xs font-black uppercase tracking-[0.16em] text-indigo-500">
-                      Daily Brief
-                    </p>
-                    <h2 className="mt-2 text-2xl font-black text-slate-950">
-                      오늘 살펴볼 종목
-                    </h2>
-                  </div>
-                  <div className="rounded-full bg-white px-4 py-2 text-xs font-bold text-slate-500 shadow-sm">
-                    업데이트 08:30
-                  </div>
-                </div>
-
-                <div className="mt-6 grid gap-4 md:grid-cols-3">
-                  {candidates.map((stock) => (
-                    <article
-                      key={stock.name}
-                      className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm"
-                    >
-                      <div
-                        className={`mb-5 flex h-12 w-12 items-center justify-center rounded-2xl ${stock.theme} text-sm font-black text-white`}
-                      >
-                        {stock.score}
+              <div className="p-4 sm:p-6">
+                <div className="grid gap-4 lg:grid-cols-[1fr_240px]">
+                  <section className="rounded-2xl bg-white p-4 shadow-[0_20px_60px_rgba(15,23,42,0.06)]">
+                    <div className="mb-4 flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <span className="h-2.5 w-2.5 rounded-full bg-emerald-400 shadow-[0_0_0_4px_rgba(52,211,153,0.14)]" />
+                        <p className="text-sm font-black text-slate-950">국내 정규장</p>
                       </div>
-                      <p className="text-lg font-black text-slate-950">
-                        {stock.name}
-                      </p>
-                      <p className="mt-1 text-xs font-bold text-slate-400">
-                        {stock.tag}
-                      </p>
-                      <div className="mt-5 h-2 rounded-full bg-slate-100">
-                        <div
-                          className={`h-full rounded-full ${stock.theme}`}
-                          style={{ width: `${stock.score}%` }}
-                        />
-                      </div>
-                    </article>
-                  ))}
-                </div>
-
-                <div className="mt-5 grid gap-4 lg:grid-cols-[1fr_280px]">
-                  <div className="rounded-2xl border border-slate-100 bg-white p-5">
-                    <div className="flex items-center justify-between">
-                      <p className="font-black text-slate-950">시장 흐름</p>
-                      <IoTrendingUpOutline className="h-5 w-5 text-emerald-500" />
+                      <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-black text-emerald-600">
+                        장중
+                      </span>
                     </div>
-                    <div className="mt-6 flex h-32 items-end gap-2">
-                      {[38, 56, 44, 72, 64, 86, 78, 92, 84].map((height) => (
-                        <div
-                          key={height}
-                          className="flex-1 rounded-t-xl bg-gradient-to-t from-indigo-400 to-sky-300"
-                          style={{ height: `${height}%` }}
-                        />
+                    <div className="grid gap-3 sm:grid-cols-3">
+                      {[
+                        { name: "KOSPI", value: "2,742.31", change: "+0.82%", up: true },
+                        { name: "KOSDAQ", value: "873.94", change: "-0.18%", up: false },
+                        { name: "USD/KRW", value: "1,346.20", change: "+0.21%", up: true },
+                      ].map((index) => (
+                        <div key={index.name} className="rounded-xl border border-slate-100 bg-slate-50/70 p-3">
+                          <p className="text-xs font-bold text-slate-500">{index.name}</p>
+                          <p className="mt-1 text-xl font-black text-slate-950">{index.value}</p>
+                          <p className={`mt-1 text-xs font-black ${index.up ? "text-rose-500" : "text-blue-500"}`}>
+                            {index.change}
+                          </p>
+                        </div>
                       ))}
                     </div>
-                  </div>
+                  </section>
 
-                  <div className="rounded-2xl border border-slate-100 bg-slate-950 p-5 text-white">
-                    <p className="text-xs font-black uppercase tracking-[0.14em] text-slate-400">
-                      AI Report
-                    </p>
-                    <p className="mt-4 text-lg font-black">
-                      뉴스와 공시 변화가 가격 흐름에 반영되는 구간을 표시합니다.
-                    </p>
-                    <div className="mt-5 inline-flex items-center gap-2 rounded-full bg-white/10 px-3 py-2 text-xs font-bold">
-                      <IoCheckmarkCircle className="h-4 w-4 text-emerald-300" />
-                      근거 확인 가능
+                  <section className="rounded-2xl bg-blue-50 p-4 text-slate-800 shadow-[0_20px_60px_rgba(82,103,255,0.10)]">
+                    <p className="text-sm font-bold text-blue-500">내 자산</p>
+                    <p className="mt-2 text-2xl font-black text-slate-900">139만 7,380원</p>
+                    <p className="mt-2 text-sm font-bold text-blue-400">+2.37% 오늘</p>
+                    <div className="mt-4 grid grid-cols-2 gap-3">
+                      <div className="rounded-xl bg-white/70 p-2.5 ring-1 ring-blue-100">
+                        <p className="text-xs text-slate-400">수익</p>
+                        <p className="mt-1 text-sm font-black text-slate-800">+29,770원</p>
+                      </div>
+                      <div className="rounded-xl bg-white/70 p-2.5 ring-1 ring-blue-100">
+                        <p className="text-xs text-slate-400">현금</p>
+                        <p className="mt-1 text-sm font-black text-slate-800">86,539원</p>
+                      </div>
                     </div>
-                  </div>
+                  </section>
+                </div>
+
+                <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_260px]">
+                  <section className="rounded-2xl bg-white p-4 shadow-[0_20px_60px_rgba(15,23,42,0.06)]">
+                    <div className="mb-3 flex items-end justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-bold text-[#5267ff]">실시간 차트</p>
+                        <h3 className="mt-1 text-xl font-black text-slate-950">삼성전자</h3>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-lg font-black text-slate-950">81,200원</p>
+                        <p className="text-sm font-black text-rose-500">+0.61%</p>
+                      </div>
+                    </div>
+                    <div className="relative h-[170px] overflow-hidden rounded-2xl border border-slate-100 bg-white">
+                      <div className="absolute inset-x-4 top-1/3 h-px bg-slate-100" />
+                      <div className="absolute inset-x-4 bottom-1/3 h-px bg-slate-100" />
+                      <svg viewBox="0 0 520 180" className="absolute inset-0 h-full w-full" aria-hidden="true">
+                        <defs>
+                          <linearGradient id="landingChartFill" x1="0" x2="0" y1="0" y2="1">
+                            <stop offset="0%" stopColor="#fb7185" stopOpacity="0.2" />
+                            <stop offset="100%" stopColor="#fb7185" stopOpacity="0" />
+                          </linearGradient>
+                        </defs>
+                        <path d="M0 132 C42 126 68 138 104 112 C148 82 182 98 224 70 C268 40 310 54 352 30 C404 0 452 18 520 8 L520 180 L0 180 Z" fill="url(#landingChartFill)" />
+                        <path d="M0 132 C42 126 68 138 104 112 C148 82 182 98 224 70 C268 40 310 54 352 30 C404 0 452 18 520 8" fill="none" stroke="#fb7185" strokeLinecap="round" strokeLinejoin="round" strokeWidth="5" />
+                      </svg>
+                    </div>
+
+                  </section>
+
+                  <section className="rounded-2xl bg-white p-4 shadow-[0_20px_60px_rgba(15,23,42,0.06)]">
+                    <div className="mb-3 flex items-center justify-between">
+                      <h3 className="text-lg font-black text-slate-950">실시간 종목 랭킹</h3>
+                      <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-[#eef2ff] text-[#5267ff]">
+                        <IoTrendingUpOutline className="h-4 w-4" />
+                      </span>
+                    </div>
+                    <div className="space-y-2">
+                      {[
+                        { rank: 1, name: "삼성전자", price: "81,200", change: "+0.61%", up: true },
+                        { rank: 2, name: "SK하이닉스", price: "163,000", change: "-1.25%", up: false },
+                        { rank: 3, name: "NAVER", price: "186,700", change: "+2.10%", up: true },
+                      ].map((stock) => (
+                        <div key={stock.rank} className="flex items-center gap-2.5 rounded-lg border border-slate-100 p-2.5">
+                          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-xs font-black text-slate-500">
+                            {stock.rank}
+                          </span>
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate text-sm font-black text-slate-950">{stock.name}</p>
+                            <p className="text-xs font-bold text-slate-400">{stock.price}원</p>
+                          </div>
+                          <p className={`text-xs font-black ${stock.up ? "text-rose-500" : "text-blue-500"}`}>
+                            {stock.change}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+                </div>
+
+                <div className="mt-4 grid gap-4 lg:grid-cols-3">
+                  <article className="rounded-2xl bg-violet-50 p-4 shadow-[0_20px_60px_rgba(139,92,246,0.10)]">
+                    <div className="mb-3 flex items-center justify-between">
+                      <h4 className="text-base font-black text-slate-900">오늘의 뉴스</h4>
+                      <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-violet-100 text-violet-500">
+                        <IoNewspaperOutline className="h-4 w-4" />
+                      </span>
+                    </div>
+                    <div className="space-y-2">
+                      {[
+                        { title: "HBM 공급 확대 기대감", meta: "09:12 Market" },
+                        { title: "외국인 대형주 순매수", meta: "08:48 Brief" },
+                      ].map((news) => (
+                        <div key={news.title} className="rounded-lg bg-white/85 px-2.5 py-2 ring-1 ring-violet-100">
+                          <p className="text-xs font-black leading-5 text-slate-800">{news.title}</p>
+                          <p className="mt-0.5 text-[11px] font-bold text-slate-400">{news.meta}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </article>
+
+                  <article className="rounded-2xl bg-amber-50 p-4 shadow-[0_20px_60px_rgba(245,158,11,0.12)]">
+                    <div className="mb-3 flex items-center justify-between">
+                      <h4 className="text-base font-black text-slate-950">오늘의 공시</h4>
+                      <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-white text-amber-700 shadow-sm">
+                        <IoDocumentTextOutline className="h-4 w-4" />
+                      </span>
+                    </div>
+                    <div className="space-y-2">
+                      {[
+                        { company: "삼성전자", title: "기업설명회 일정" },
+                        { company: "현대차", title: "주주환원 관련 안내" },
+                      ].map((item) => (
+                        <div key={`${item.company}-${item.title}`} className="rounded-lg bg-white/85 px-2.5 py-2">
+                          <p className="text-[11px] font-black text-amber-700">{item.company}</p>
+                          <p className="mt-0.5 text-xs font-black leading-5 text-slate-950">{item.title}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </article>
+
+                  <article className="rounded-2xl bg-white p-4 shadow-[0_20px_60px_rgba(15,23,42,0.06)] ring-1 ring-slate-100">
+                    <div className="mb-3 flex items-center justify-between">
+                      <h4 className="text-base font-black text-slate-950">최근 본 종목</h4>
+                      <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-100 text-slate-500">
+                        <IoPulseOutline className="h-4 w-4" />
+                      </span>
+                    </div>
+                    <div className="space-y-2">
+                      {[
+                        { name: "NAVER", code: "035420", change: "+2.10%", up: true },
+                        { name: "LG에너지솔루션", code: "373220", change: "-0.42%", up: false },
+                      ].map((stock) => (
+                        <div key={stock.code} className="flex items-center gap-2 rounded-lg border border-slate-100 p-2.5">
+                          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-xs font-black text-slate-500">
+                            {stock.name.slice(0, 1)}
+                          </span>
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate text-xs font-black text-slate-950">{stock.name}</p>
+                            <p className="text-[11px] font-bold text-slate-400">{stock.code}</p>
+                          </div>
+                          <p className={`text-[11px] font-black ${stock.up ? "text-rose-500" : "text-blue-500"}`}>
+                            {stock.change}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  </article>
                 </div>
               </div>
             </div>
@@ -341,7 +439,7 @@ export default function LandingPage() {
         </div>
       </section>
 
-      <main className="relative z-10 px-5 pb-24 pt-[310px] sm:pt-[300px] lg:pt-[290px]">
+      <main className="relative z-10 px-5 pb-24 pt-[650px] sm:pt-[560px] lg:pt-[490px]">
         <section id="service-flow" className="mx-auto max-w-[1120px] py-20">
           <div className="max-w-[760px]">
             <p className="text-xs font-black uppercase tracking-[0.18em] text-indigo-500">

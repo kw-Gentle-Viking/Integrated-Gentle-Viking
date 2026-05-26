@@ -24,8 +24,10 @@ import CandleChart from "@/components/chart/CandleChart";
 const chartRanges = [
   { key: "1D", label: "1일", points: 80 },
   { key: "1W", label: "1주", points: 160 },
-  { key: "1M", label: "1개월", points: 320 },
+  { key: "3M", label: "3달", points: 320 },
   { key: "1Y", label: "1년", points: 720 },
+  { key: "5Y", label: "5년", points: 1600 },
+  { key: "ALL", label: "전체", points: Number.POSITIVE_INFINITY },
 ];
 
 function MarketSparkline({ color, isUp }: { color: string; isUp: boolean }) {
@@ -68,7 +70,7 @@ export default function DashboardPage() {
     [selectedStock],
   );
   const visibleCandles = useMemo(
-    () => candles.slice(-chartRange.points),
+    () => chartRange.key === "ALL" ? candles : candles.slice(-chartRange.points),
     [candles, chartRange],
   );
 
@@ -165,7 +167,7 @@ export default function DashboardPage() {
               차트를 불러오는 중입니다.
             </div>
           )}
-          <div className="mt-3 grid grid-cols-4 rounded-2xl bg-slate-100 p-1">
+          <div className="mt-3 grid grid-cols-6 rounded-2xl bg-slate-100 p-1">
             {chartRanges.map((range) => (
               <button
                 key={range.key}

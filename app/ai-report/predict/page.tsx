@@ -11,7 +11,17 @@ type Prediction = {
   sell: number;
 };
 
-const predictions: Record<string, { name: string; code: string; price: string; change: string; prediction: Prediction }> = {
+type StockPrediction = {
+  name: string;
+  code: string;
+  price: string;
+  change: string;
+  prediction: Prediction;
+};
+
+const defaultPrediction: Prediction = { buy: 45, hold: 40, sell: 15 };
+
+const predictions: Record<string, StockPrediction> = {
   "005930": { name: "삼성전자", code: "005930", price: "81,200원", change: "+0.61%", prediction: { buy: 58, hold: 31, sell: 11 } },
   "000660": { name: "SK하이닉스", code: "000660", price: "163,000원", change: "-1.25%", prediction: { buy: 42, hold: 45, sell: 13 } },
   "035420": { name: "NAVER", code: "035420", price: "186,700원", change: "+2.10%", prediction: { buy: 49, hold: 39, sell: 12 } },
@@ -65,7 +75,14 @@ function ProbabilityRing({ label, value, color, desc }: { label: string; value: 
 function PredictContent() {
   const searchParams = useSearchParams();
   const code = searchParams.get("code") ?? "005930";
-  const stock = predictions[code] ?? predictions["005930"];
+  const baseStock = predictions[code];
+  const stock: StockPrediction = {
+    name: searchParams.get("name") || baseStock?.name || "종목명 없음",
+    code,
+    price: searchParams.get("price") || baseStock?.price || "-",
+    change: searchParams.get("change") || baseStock?.change || "-",
+    prediction: baseStock?.prediction || defaultPrediction,
+  };
   const [loadingCode, setLoadingCode] = useState(code);
   const [isRerunning, setIsRerunning] = useState(true);
   const dominant = predictionItems.reduce((best, item) =>

@@ -3,24 +3,16 @@
 import { useState } from "react";
 import { createPortal } from "react-dom";
 import { FiHeart, FiTrash2, FiX } from "react-icons/fi";
-
-const initialWatchlist = [
-  { name: "삼성전자", code: "005930", price: "81,200원", change: "+0.61%", memo: "실적 발표 전 변동성 확인" },
-  { name: "SK하이닉스", code: "000660", price: "163,000원", change: "-1.25%", memo: "HBM 수급 뉴스 추적" },
-  { name: "NAVER", code: "035420", price: "186,700원", change: "+2.10%", memo: "AI 서비스 매출 반영 체크" },
-  { name: "LG에너지솔루션", code: "373220", price: "348,500원", change: "+2.08%", memo: "전기차 수요 회복 여부" },
-];
-
-type WatchStock = (typeof initialWatchlist)[number];
+import { StockListItem, useStockList } from "@/lib/stock-list/StockListContext";
 
 export default function WatchlistPage() {
-  const [watchlist, setWatchlist] = useState(initialWatchlist);
-  const [deleteTarget, setDeleteTarget] = useState<WatchStock | null>(null);
+  const { favoriteStocks, toggleFavorite } = useStockList();
+  const [deleteTarget, setDeleteTarget] = useState<StockListItem | null>(null);
   const modalRoot = typeof document === "undefined" ? null : document.body;
 
   const handleDelete = () => {
     if (!deleteTarget) return;
-    setWatchlist((items) => items.filter((item) => item.code !== deleteTarget.code));
+    toggleFavorite(deleteTarget.code, deleteTarget);
     setDeleteTarget(null);
   };
 
@@ -33,7 +25,7 @@ export default function WatchlistPage() {
               <p className="text-sm font-bold text-[#5267ff]">Watchlist</p>
               <h1 className="mt-2 text-4xl font-black text-slate-950">관심 종목</h1>
               <p className="mt-3 text-sm leading-6 text-slate-500">
-                AI가 매일 추천해주는 종목 중 관심 가는 종목을 장바구니처럼 담아두고 확인힙니다.
+                AI 추천 리포트나 실시간 종목 랭킹에서 하트를 누른 종목을 모아 확인합니다.
               </p>
             </div>
           </div>
@@ -46,7 +38,7 @@ export default function WatchlistPage() {
               <span>메모</span>
               <span className="text-right">관리</span>
             </div>
-            {watchlist.map((stock) => (
+            {favoriteStocks.length > 0 ? favoriteStocks.map((stock) => (
               <div key={stock.code} className="grid grid-cols-[1.2fr_0.8fr_0.8fr_1.4fr_72px] items-center border-t border-slate-100 px-5 py-4 text-sm">
                 <div className="flex items-center gap-3">
                   <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-rose-50 text-rose-500">
@@ -59,7 +51,7 @@ export default function WatchlistPage() {
                 </div>
                 <span className="font-bold text-slate-950">{stock.price}</span>
                 <span className={`font-black ${stock.change.startsWith("-") ? "text-blue-500" : "text-rose-500"}`}>{stock.change}</span>
-                <span className="text-slate-500">{stock.memo}</span>
+                <span className="line-clamp-1 text-slate-500">{stock.memo ?? "AI 추천 리포트에서 저장한 관심 종목"}</span>
                 <button
                   type="button"
                   onClick={() => setDeleteTarget(stock)}
@@ -69,7 +61,12 @@ export default function WatchlistPage() {
                   <FiTrash2 className="h-4 w-4" />
                 </button>
               </div>
-            ))}
+            )) : (
+              <div className="border-t border-slate-100 px-5 py-12 text-center">
+                <p className="text-sm font-black text-slate-500">아직 관심 종목이 없습니다.</p>
+                <p className="mt-2 text-sm text-slate-400">AI 리포트에서 하트를 누르면 이곳에 바로 추가됩니다.</p>
+              </div>
+            )}
           </div>
         </section>
       </div>
