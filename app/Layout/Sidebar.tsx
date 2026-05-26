@@ -78,7 +78,7 @@ export default function Sidebar() {
         title={isOpen ? undefined : item.name}
         className={`${linkBaseClass} ${
           isActive
-            ? "bg-[#5267ff] text-white shadow-[0_10px_24px_rgba(82,103,255,0.28)]"
+            ? "bg-white/55 text-slate-700 shadow-[0_14px_34px_rgba(15,23,42,0.13)] ring-1 ring-white/70 backdrop-blur-md"
             : "text-slate-500 hover:bg-white hover:text-slate-950"
         }`}
       >
@@ -90,7 +90,7 @@ export default function Sidebar() {
         </span>
         {isOpen && "badge" in item && item.badge ? (
           <span
-            className={`flex h-5 min-w-5 items-center justify-center rounded-full px-1 text-[10px] ${isActive ? "bg-white/20 text-white" : "bg-orange-100 text-orange-600"}`}
+            className={`flex h-5 min-w-5 items-center justify-center rounded-full px-1 text-[10px] ${isActive ? "bg-white/65 text-slate-700" : "bg-orange-100 text-orange-600"}`}
           >
             {item.badge}
           </span>
@@ -173,7 +173,7 @@ export default function Sidebar() {
                       href={`/mypage?tab=${subItem.key}`}
                       className={`flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition ${
                         isActive
-                          ? "bg-[#eef2ff] font-black text-[#5267ff]"
+                          ? "bg-white/55 font-black text-slate-700 shadow-[0_10px_28px_rgba(15,23,42,0.10)] ring-1 ring-white/70 backdrop-blur-md"
                           : "font-bold text-slate-500 hover:bg-white hover:text-slate-950"
                       }`}
                     >
