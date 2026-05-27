@@ -1,6 +1,5 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { FiShoppingBag, FiX } from "react-icons/fi";
 
@@ -13,10 +12,7 @@ interface Props {
 
 export default function CartConfirmModal({ stockName, mode, onConfirm, onCancel }: Props) {
   const isAdd = mode === "add";
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => setMounted(true), []);
-
-  if (!mounted) return null;
+  if (typeof document === "undefined") return null;
 
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 backdrop-blur-sm">
