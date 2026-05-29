@@ -27,7 +27,7 @@ export default function PortfolioPage() {
       <section className="rounded-2xl bg-white p-6 shadow-[0_24px_80px_rgba(15,23,42,0.06)] lg:p-8">
         <div className="flex flex-wrap items-start justify-between gap-5">
           <div>
-            <p className="text-sm font-bold text-slate-400">My Portfolio</p>
+            <p className="text-sm font-bold text-[#5267ff]">My Portfolio</p>
             <h1 className="mt-2 text-4xl font-black text-slate-950">
               내 주식보기
             </h1>
