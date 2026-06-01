@@ -30,6 +30,15 @@ export default function CandleChart({ candles, height = 280 }: Props) {
       },
       rightPriceScale: { borderColor: "#e2e8f0" },
       timeScale: { borderColor: "#e2e8f0", timeVisible: true },
+      handleScroll: {
+        mouseWheel: false,      // 스크롤로 좌우 이동 비활성화
+        pressedMouseMove: true, // 드래그로 좌우 이동
+      },
+      handleScale: {
+        mouseWheel: true,       // 스크롤로 확대/축소 (캔들 개수 조절)
+        pinch: true,
+        axisPressedMouseMove: { time: true, price: true },
+      },
     });
 
     const series = chart.addSeries(CandlestickSeries, {
