@@ -337,7 +337,7 @@ export default function AIReportPage() {
   const [userId, setUserId] = useState<string | null>(null);
   const [nickname, setNickname] = useState("회원");
   const [isGenerating, setIsGenerating] = useState(false);
-  const [stocks, setStocks] = useState<ReportStock[]>(fallbackReportStocks);
+  const [stocks, setStocks] = useState<ReportStock[]>([]);
   const [reportError, setReportError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -410,7 +410,7 @@ export default function AIReportPage() {
           ? error.message
           : "추천 리포트를 불러오지 못했습니다.",
       );
-      setStocks(fallbackReportStocks);
+      setStocks([]);
     } finally {
       setIsGenerating(false);
     }
@@ -475,7 +475,7 @@ export default function AIReportPage() {
 
       {reportError ? (
         <div className="mt-5 rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3 text-sm font-bold text-amber-700">
-          {reportError} 기존 예시 리포트를 표시합니다.
+          {reportError}
         </div>
       ) : null}
 
@@ -499,6 +499,11 @@ export default function AIReportPage() {
         </div>
       ) : (
         <div className="mt-6 space-y-4">
+          {!reportError && displayedStocks.length === 0 ? (
+            <div className="rounded-2xl border border-slate-100 bg-slate-50 px-5 py-12 text-center text-sm font-bold text-slate-400">
+              백엔드에서 수신된 추천 리포트가 없습니다.
+            </div>
+          ) : null}
           {displayedStocks.map((stock) => (
             <ReportCard
               key={stock.code}

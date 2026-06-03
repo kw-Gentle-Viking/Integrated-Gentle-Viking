@@ -1,6 +1,7 @@
 "use client";
 
-import React, { createContext, useContext, useState } from "react";
+import React, { createContext, useContext, useEffect, useState } from "react";
+import { apiFetch } from "@/lib/signup/auth";
 
 export type StockListItem = {
   code: string;
@@ -24,6 +25,39 @@ interface StockListContextType {
 
 const StockListContext = createContext<StockListContextType | undefined>(undefined);
 
+
+type BackendBasketItem = {
+  ticker: string;
+  ticker_name: string;
+};
+
+async function addBasketItem(stock: StockListItem) {
+  await apiFetch(`${process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"}/basket`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ticker: stock.code, ticker_name: stock.name }),
+  });
+}
+
+async function removeBasketItem(code: string) {
+  await apiFetch(`${process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"}/basket/${encodeURIComponent(code)}`, {
+    method: "DELETE",
+  });
+}
+
+async function fetchBasketItems(): Promise<StockListItem[]> {
+  const res = await apiFetch(`${process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"}/basket`);
+  if (!res.ok) return [];
+  const items = (await res.json()) as BackendBasketItem[];
+  return items.map((item) => ({
+    code: item.ticker,
+    name: item.ticker_name,
+    price: "-",
+    change: "-",
+    logoText: item.ticker_name.slice(0, 1),
+  }));
+}
+
 function makeFallbackStock(code: string): StockListItem {
   return {
     code,
@@ -46,6 +80,14 @@ export const StockListProvider = ({ children }: { children: React.ReactNode }) =
   const [favoriteStocks, setFavoriteStocks] = useState<StockListItem[]>([]);
   const [cartStocks, setCartStocks] = useState<StockListItem[]>([]);
 
+  useEffect(() => {
+    let cancelled = false;
+    void fetchBasketItems().then((items) => {
+      if (!cancelled && items.length > 0) setCartStocks(items);
+    });
+    return () => { cancelled = true; };
+  }, []);
+
   const favorites = favoriteStocks.map((stock) => stock.code);
   const cart = cartStocks.map((stock) => stock.code);
 
@@ -59,11 +101,19 @@ export const StockListProvider = ({ children }: { children: React.ReactNode }) =
   };
 
   const toggleCart = (code: string, stock?: StockListItem) => {
+    const nextStock = stock ?? makeFallbackStock(code);
+    const removing = cartStocks.some((item) => item.code === code);
+
     setCartStocks((prev) => {
       if (prev.some((item) => item.code === code)) {
         return prev.filter((item) => item.code !== code);
       }
-      return upsertStock(prev, stock ?? makeFallbackStock(code));
+      return upsertStock(prev, nextStock);
+    });
+
+    const sync = removing ? removeBasketItem(code) : addBasketItem(nextStock);
+    void sync.catch((error) => {
+      console.error("basket sync failed", error);
     });
   };
 

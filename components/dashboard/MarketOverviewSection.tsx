@@ -3,7 +3,6 @@
 import { useEffect, useState } from "react";
 import { fetchMarketOverview } from "@/lib/api/prices";
 import type { MarketIndexItem } from "@/lib/api/prices";
-import { mockMarketIndices } from "@/lib/dashboard/mock";
 
 function MarketSparkline({ color, isUp }: { color: string; isUp: boolean }) {
   const path = isUp
@@ -32,9 +31,10 @@ function getMarketStatus(): { label: string; isOpen: boolean } {
 }
 
 export default function MarketOverviewSection() {
-  const [indices, setIndices] = useState<MarketIndexItem[]>(mockMarketIndices);
+  const [indices, setIndices] = useState<MarketIndexItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [marketStatus, setMarketStatus] = useState(getMarketStatus);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const timer = setInterval(() => setMarketStatus(getMarketStatus()), 60_000);
@@ -43,8 +43,11 @@ export default function MarketOverviewSection() {
 
   useEffect(() => {
     fetchMarketOverview()
-      .then((data) => { if (data.length > 0) setIndices(data); })
-      .catch(() => {/* 실패 시 mock 데이터 유지 */})
+      .then((data) => { setIndices(data); setError(null); })
+      .catch((err: unknown) => {
+        setIndices([]);
+        setError(err instanceof Error ? err.message : "시장 개요를 불러오지 못했습니다.");
+      })
       .finally(() => setLoading(false));
   }, []);
 
@@ -68,6 +71,12 @@ export default function MarketOverviewSection() {
         </span>
       </div>
 
+      {error ? (
+        <div className="rounded-xl border border-rose-100 bg-rose-50 px-4 py-3 text-sm font-bold text-rose-600">
+          {error}
+        </div>
+      ) : null}
+
       <div className="grid gap-3 md:grid-cols-3">
         {indices.map((index) => (
           <div
@@ -86,6 +95,11 @@ export default function MarketOverviewSection() {
             </div>
           </div>
         ))}
+        {!loading && !error && indices.length === 0 ? (
+          <div className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-8 text-center text-sm font-bold text-slate-400 md:col-span-3">
+            수신된 시장 데이터가 없습니다.
+          </div>
+        ) : null}
       </div>
     </article>
   );

@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { FiAlertCircle, FiArrowLeft, FiCpu, FiRefreshCw, FiShoppingBag } from "react-icons/fi";
@@ -44,6 +44,18 @@ type PredictionResult = {
   report: string;
 };
 
+type ReportSection = {
+  title: string;
+  body: string[];
+};
+
+type ReportCard = {
+  title: string;
+  eyebrow: string;
+  body: string[];
+  tone: "summary" | "feature" | "attention" | "market" | "risk";
+};
+
 const predictionItems = [
   { key: "buy", label: "매수", color: "#f43f5e", desc: "상승 방향성과 거래량 확장 가능성" },
   { key: "hold", label: "관망", color: "#5267ff", desc: "추가 확인이 필요한 중립 구간" },
@@ -56,16 +68,6 @@ const signalLabel: Record<string, string> = {
   BUY: "매수",
   HOLD: "관망",
   SELL: "매도",
-};
-
-const previewPrediction: PredictionResult = {
-  prediction: { buy: 58, hold: 31, sell: 11 },
-  signal: "매수",
-  confidence: 58,
-  tradeDatetime: new Date().toISOString(),
-  modelVersion: "tft-preview",
-  report:
-    "매수 확률이 가장 높게 산출된 예시입니다. 최근 가격 흐름과 거래량 확장 가능성이 상승 방향성을 지지하지만, 관망 확률도 31%로 남아 있어 신규 진입은 분할 접근이 적합합니다. 실제 Gemini 리포트가 수신되면 이 영역에 종목별 추론 근거, 리스크 요인, 대응 전략이 긴 문단 형태로 표시됩니다.",
 };
 
 function toPercent(value: unknown) {
@@ -94,7 +96,7 @@ function normalizePrediction(data: BackendPrediction): PredictionResult {
       data.report ||
       data.gemini_report ||
       data.analysis ||
-      "Gemini 리포트가 아직 응답에 포함되지 않았습니다. 추론 확률은 정상 수신됐지만, 상세 분석 문구는 백엔드 리포트 필드가 연결되면 이 영역에 표시됩니다.",
+      "백엔드 응답에 상세 분석 리포트가 포함되지 않았습니다.",
   };
 }
 
@@ -127,7 +129,102 @@ function makeStockListItem(stock: StockPrediction): StockListItem {
   };
 }
 
-function ProbabilityRing({ label, value, color, desc, isPreview = false }: { label: string; value: number; color: string; desc: string; isPreview?: boolean }) {
+function cleanMarkdown(line: string) {
+  return line
+    .replace(/^[-*]\s+/, "")
+    .replace(/^\d+\.\s+/, "")
+    .replace(/\*\*/g, "")
+    .trim();
+}
+
+function parseReportSections(report: string): ReportSection[] {
+  const lines = report
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .filter((line) => line && line !== "---");
+
+  const sections: ReportSection[] = [];
+  let current: ReportSection = { title: "AI 요약", body: [] };
+
+  for (const line of lines) {
+    const heading = line.match(/^#{1,4}\s+(.+)$/);
+    if (heading) {
+      if (current.body.length > 0) sections.push(current);
+      current = { title: cleanMarkdown(heading[1]), body: [] };
+      continue;
+    }
+
+    const cleaned = cleanMarkdown(line);
+    if (cleaned) current.body.push(cleaned);
+  }
+
+  if (current.body.length > 0) sections.push(current);
+  return sections.length > 0 ? sections : [{ title: "AI 분석 리포트", body: [report] }];
+}
+
+function findReportBody(sections: ReportSection[], keywords: string[], limit = 7) {
+  const matches = sections.filter((section) => {
+    const haystack = `${section.title} ${section.body.join(" ")}`.toLowerCase();
+    return keywords.some((keyword) => haystack.includes(keyword.toLowerCase()));
+  });
+
+  const body = matches.flatMap((section) => section.body).filter(Boolean);
+  if (body.length > 0) return body.slice(0, limit);
+  return sections.flatMap((section) => section.body).filter(Boolean).slice(0, limit);
+}
+
+function buildReportCards(report: string): ReportCard[] {
+  const sections = parseReportSections(report);
+
+  return [
+    {
+      title: "예측 요약",
+      eyebrow: "Prediction Summary",
+      body: findReportBody(sections, ["예측 요약", "모델 예측", "매수 확률", "관망 확률", "매도 확률"], 5),
+      tone: "summary",
+    },
+    {
+      title: "주요 피쳐 분석",
+      eyebrow: "Core Features",
+      body: findReportBody(sections, ["핵심 피처", "지표 분석", "macd", "볼린저", "이격도", "순매수"], 8),
+      tone: "feature",
+    },
+    {
+      title: "시간 가중치 분석",
+      eyebrow: "Attention Weight",
+      body: findReportBody(sections, ["시간적", "어텐션", "분 전", "최근 1시간"], 6),
+      tone: "attention",
+    },
+    {
+      title: "종목 및 시장 환경",
+      eyebrow: "Market Context",
+      body: findReportBody(sections, ["섹터", "시장", "거시", "이벤트", "장 진행률", "금통위", "FOMC"], 7),
+      tone: "market",
+    },
+    {
+      title: "투자 유의 사항",
+      eyebrow: "Risk Notice",
+      body: findReportBody(sections, ["투자 유의", "원금 손실", "투자 결정", "불확실", "주의"], 7),
+      tone: "risk",
+    },
+  ];
+}
+
+function cardToneClass(tone: ReportCard["tone"]) {
+  if (tone === "summary") return "border-[#5267ff]/20 bg-[#f4f7ff]";
+  return "border-slate-100 bg-white";
+}
+
+function cardEyebrowClass(tone: ReportCard["tone"]) {
+  if (tone === "summary") return "text-[#5267ff]";
+  return "text-slate-400";
+}
+
+function delay(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function ProbabilityRing({ label, value, color, desc }: { label: string; value: number; color: string; desc: string }) {
   const [animatedValue, setAnimatedValue] = useState(0);
 
   useEffect(() => {
@@ -149,21 +246,14 @@ function ProbabilityRing({ label, value, color, desc, isPreview = false }: { lab
     <div className="rounded-2xl border border-slate-100 bg-white p-6 text-center shadow-[0_16px_44px_rgba(15,23,42,0.05)]">
       <div
         className="mx-auto flex h-36 w-36 items-center justify-center rounded-full transition-[background] duration-1000 ease-out"
-        style={{
-          background: `conic-gradient(${color} ${animatedValue * 3.6}deg, #e5e7eb 0deg)`,
-        }}
+        style={{ background: `conic-gradient(${color} ${animatedValue * 3.6}deg, #e5e7eb 0deg)` }}
       >
         <div className="flex h-24 w-24 flex-col items-center justify-center rounded-full bg-white shadow-inner">
           <span className="text-3xl font-black text-slate-950">{value}%</span>
           <span className="text-xs font-black text-slate-400">{label}</span>
         </div>
       </div>
-      <div className="mt-5 flex items-center justify-center gap-2">
-        <p className="text-lg font-black text-slate-950">{label}</p>
-        {isPreview ? (
-          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-black text-slate-400">예시</span>
-        ) : null}
-      </div>
+      <p className="mt-5 text-lg font-black text-slate-950">{label}</p>
       <p className="mt-2 text-sm leading-6 text-slate-500">{desc}</p>
     </div>
   );
@@ -184,184 +274,217 @@ function PredictContent() {
   const [result, setResult] = useState<PredictionResult | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [requestMessage, setRequestMessage] = useState<string | null>(null);
 
-  const displayResult = result ?? previewPrediction;
-  const isPreview = Boolean(errorMessage && !result);
-  const dominant = predictionItems.reduce((best, item) =>
-    displayResult.prediction[item.key] > displayResult.prediction[best.key] ? item : best,
-  );
+  const fetchPrediction = useCallback(async () => {
+    const res = await apiFetch(`${API_BASE}/ai/predictions/${encodeURIComponent(code)}`);
+    if (res.status === 404) return false;
+    if (!res.ok) throw new Error(`추론 결과 요청 실패 (${res.status})`);
 
-  const fetchPrediction = async () => {
-    setIsLoading(true);
+    const data = (await res.json()) as BackendPrediction;
+    setResult(normalizePrediction(data));
     setErrorMessage(null);
+    setRequestMessage(null);
+    return true;
+  }, [code]);
+
+  const requestPrediction = useCallback(async () => {
+    setIsLoading(true);
+    setResult(null);
+    setErrorMessage(null);
+    setRequestMessage(`${stock.name} 실제 AI 추론을 시작하는 중입니다.`);
 
     try {
-      const res = await apiFetch(`${API_BASE}/ai/predictions/${encodeURIComponent(code)}`);
-      if (res.status === 404) {
-        setResult(null);
-        setErrorMessage("아직 백엔드에 수신된 최신 추론 결과가 없습니다.");
-        return;
-      }
-      if (!res.ok) {
-        throw new Error("prediction request failed");
+      const res = await apiFetch(`${API_BASE}/ai/predictions/request`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tickers: [code] }),
+      });
+      const payload = await res.json().catch(() => ({})) as { job_id?: string; detail?: string; message?: string };
+      if (!res.ok) throw new Error(payload.detail || payload.message || `추론 요청 실패 (${res.status})`);
+
+      setRequestMessage("AI 서버가 분석 중입니다. 결과 콜백이 도착하면 자동으로 화면이 전환됩니다.");
+
+      for (let attempt = 0; attempt < 24; attempt += 1) {
+        await delay(2500);
+        const hasResult = await fetchPrediction();
+        if (hasResult) return;
       }
 
-      const data = (await res.json()) as BackendPrediction;
-      setResult(normalizePrediction(data));
-    } catch {
+      setErrorMessage("추론 요청은 전달됐지만 아직 AI 서버 콜백 결과가 도착하지 않았습니다. 새로고침을 눌러 다시 확인해주세요.");
+    } catch (error) {
       setResult(null);
-      setErrorMessage("추론 결과를 불러오지 못했습니다. 백엔드 연결 상태를 확인해주세요.");
+      setErrorMessage(error instanceof Error ? error.message : "추론 요청 중 오류가 발생했습니다.");
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [code, fetchPrediction, stock.name]);
 
   useEffect(() => {
-    void fetchPrediction();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [code]);
+    void requestPrediction();
+  }, [requestPrediction]);
 
-  const runInference = () => {
-    void fetchPrediction();
-  };
+  const reportCards = useMemo(() => (result ? buildReportCards(result.report) : []), [result]);
+
+  const dominant = result
+    ? predictionItems.reduce((best, item) =>
+        result.prediction[item.key] > result.prediction[best.key] ? item : best,
+      )
+    : null;
 
   return (
     <>
       <section className="rounded-2xl bg-white p-6 shadow-[0_24px_80px_rgba(15,23,42,0.06)] lg:p-8">
-      <div className="flex flex-wrap items-start justify-between gap-5 border-b border-slate-100 pb-6">
-        <div>
-          <Link href="/ai-report" className="inline-flex items-center gap-2 text-sm font-black text-slate-400 transition hover:text-slate-950">
-            <FiArrowLeft className="h-4 w-4" />
-            투자 리포트로 돌아가기
-          </Link>
-          <p className="mt-5 text-sm font-bold text-[#5267ff]">AI Prediction</p>
-          <h1 className="mt-2 text-4xl font-black text-slate-950">{stock.name} AI 예측</h1>
-          <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-500">
-            Temporal Fusion Transformer 추론 결과로 N일 후 매수, 관망, 매도 확률을 표시합니다.
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => setPendingCart(stockListItem)}
-            title={isInCart(stock.code) ? "포트폴리오에서 제외" : "포트폴리오에 추가"}
-            className={`flex h-11 items-center gap-2 rounded-full border px-4 text-sm font-black transition ${
-              isInCart(stock.code)
-                ? "border-amber-200 bg-amber-50 text-amber-600 hover:bg-amber-100"
-                : "border-slate-200 bg-white text-slate-500 hover:border-amber-200 hover:bg-amber-50 hover:text-amber-600"
-            }`}
-          >
-            <FiShoppingBag className="h-4 w-4" />
-            포트폴리오 담기
-          </button>
-          <button
-            type="button"
-            onClick={runInference}
-            disabled={isLoading}
-            className="flex h-11 items-center gap-2 rounded-full border border-slate-200 bg-slate-100 px-5 text-sm font-black text-slate-600 transition hover:border-slate-300 hover:bg-slate-200 hover:text-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            <FiRefreshCw className={`h-4 w-4 ${isLoading ? "animate-spin" : ""}`} />
-            다시 조회
-          </button>
-          
-        </div>
-      </div>
-
-      {isLoading ? (
-        <div className="mt-6 flex min-h-[420px] items-center justify-center rounded-2xl bg-[#f4f7ff] p-8">
-          <div className="text-center">
-            <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-full bg-white shadow-[0_18px_50px_rgba(82,103,255,0.18)]">
-              <FiCpu className="h-9 w-9 animate-pulse text-[#5267ff]" />
-            </div>
-            <h2 className="mt-6 text-2xl font-black text-slate-950">AI 추론 결과 조회 중</h2>
-            <p className="mt-3 text-sm font-bold leading-6 text-slate-500">
-              {stock.name}의 최신 추론 확률을 백엔드에서 불러오고 있습니다.
+        <div className="flex flex-wrap items-start justify-between gap-5 border-b border-slate-100 pb-6">
+          <div>
+            <Link href="/ai-report" className="inline-flex items-center gap-2 text-sm font-black text-slate-400 transition hover:text-slate-950">
+              <FiArrowLeft className="h-4 w-4" />
+              투자 리포트로 돌아가기
+            </Link>
+            <p className="mt-5 text-sm font-bold text-[#5267ff]">AI Prediction</p>
+            <h1 className="mt-2 text-4xl font-black text-slate-950">{stock.name} AI 예측</h1>
+            <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-500">
+              Temporal Fusion Transformer가 백엔드와 AI 서버를 거쳐 실제 추론한 매수, 관망, 매도 확률을 표시합니다.
             </p>
-            <div className="mx-auto mt-6 h-2 w-72 overflow-hidden rounded-full bg-white">
-              <div className="h-full w-1/2 animate-[loadingSlide_1.1s_ease-in-out_infinite] rounded-full bg-[#5267ff]" />
-            </div>
           </div>
-        </div>
-      ) : (
-        <div className="mt-6 space-y-4">
-          {isPreview ? (
-            <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-amber-100 bg-amber-50 px-5 py-4">
-              <div className="flex items-start gap-3">
-                <FiAlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-amber-500" />
-                <div>
-                  <p className="text-sm font-black text-amber-900">추론 결과 수신 대기 중</p>
-                  <p className="mt-1 text-xs font-bold leading-5 text-amber-700">
-                    {errorMessage} 아래 카드는 실제 응답이 들어오면 같은 위치에 값이 교체되는 예시 화면입니다.
-                  </p>
-                </div>
-              </div>
-              
-            </div>
-          ) : null}
-
-          <div className="grid gap-4 lg:grid-cols-[320px_1fr]">
-          <aside className="rounded-2xl bg-slate-950 p-6 text-white">
-            <FiCpu className="h-8 w-8 text-emerald-300" />
-            <p className="mt-5 text-sm font-bold text-slate-300">{stock.code}</p>
-            <h2 className="mt-1 text-3xl font-black">{stock.name}</h2>
-            <p className="mt-4 text-2xl font-black">{stock.price}</p>
-            <p className={`mt-1 text-sm font-black ${stock.change.startsWith("-") ? "text-blue-300" : "text-rose-300"}`}>
-              {stock.change}
-            </p>
-          </aside>
-
-          <div className="grid gap-4 md:grid-cols-3">
-            {predictionItems.map((item) => (
-              <ProbabilityRing
-                key={item.key}
-                label={item.label}
-                value={displayResult.prediction[item.key]}
-                color={item.color}
-                desc={item.desc}
-                isPreview={isPreview}
-              />
-            ))}
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setPendingCart(stockListItem)}
+              title={isInCart(stock.code) ? "포트폴리오에서 제외" : "포트폴리오에 추가"}
+              className={`flex h-11 items-center gap-2 rounded-full border px-4 text-sm font-black transition ${
+                isInCart(stock.code)
+                  ? "border-amber-200 bg-amber-50 text-amber-600 hover:bg-amber-100"
+                  : "border-slate-200 bg-white text-slate-500 hover:border-amber-200 hover:bg-amber-50 hover:text-amber-600"
+              }`}
+            >
+              <FiShoppingBag className="h-4 w-4" />
+              포트폴리오 담기
+            </button>
+            <button
+              type="button"
+              onClick={() => void requestPrediction()}
+              disabled={isLoading}
+              className="flex h-11 items-center gap-2 rounded-full border border-slate-200 bg-slate-100 px-5 text-sm font-black text-slate-600 transition hover:border-slate-300 hover:bg-slate-200 hover:text-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <FiRefreshCw className={`h-4 w-4 ${isLoading ? "animate-spin" : ""}`} />
+              새로고침
+            </button>
           </div>
         </div>
 
-          <article className="rounded-2xl border border-slate-100 bg-slate-50 p-5 lg:p-6">
-            <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-200/70 pb-4">
-              <div>
-                <p className="text-xs font-black uppercase text-[#5267ff]">Gemini Report</p>
-                <h2 className="mt-1 text-2xl font-black text-slate-950">추론 결과 분석 리포트</h2>
+        {isLoading ? (
+          <div className="mt-6 flex min-h-[480px] items-center justify-center rounded-2xl bg-[#f4f7ff] p-8">
+            <div className="max-w-md text-center">
+              <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-full bg-white shadow-[0_18px_50px_rgba(82,103,255,0.18)]">
+                <FiCpu className="h-9 w-9 animate-pulse text-[#5267ff]" />
               </div>
-              {/* <span className={`rounded-full px-3 py-1 text-xs font-black ${isPreview ? "bg-amber-100 text-amber-700" : "bg-emerald-100 text-emerald-700"}`}>
-                {isPreview ? "예시 미리보기" : "실제 응답"}
-              </span> */}
+              <h2 className="mt-6 text-2xl font-black text-slate-950">실제 AI 추론 중</h2>
+              <p className="mt-3 text-sm font-bold leading-6 text-slate-500">
+                {requestMessage ?? `${stock.name}의 추론 요청을 AI 서버에 전달하고 있습니다.`}
+              </p>
+              <div className="mt-6 h-2 overflow-hidden rounded-full bg-white">
+                <div className="h-full w-1/2 animate-pulse rounded-full bg-[#5267ff]" />
+              </div>
             </div>
-            <div className="mt-5 space-y-3 text-sm font-bold leading-7 text-slate-600">
-              {(isPreview
-                ? displayResult.report
-                : displayResult.report || `백엔드 /ai/predictions/${stock.code} 응답의 Gemini 리포트가 이 영역에 표시됩니다.`
-              )
-                .split(/\n+/)
-                .map((paragraph, index) => (
-                  <p key={`${paragraph}-${index}`}>{paragraph}</p>
+          </div>
+        ) : !result ? (
+          <div className="mt-6 rounded-2xl border border-amber-100 bg-amber-50 px-5 py-8 text-center">
+            <FiAlertCircle className="mx-auto h-8 w-8 text-amber-500" />
+            <p className="mt-4 text-base font-black text-amber-900">추론 결과를 아직 받지 못했습니다.</p>
+            <p className="mx-auto mt-2 max-w-2xl text-sm font-bold leading-6 text-amber-700">
+              {errorMessage ?? "AI 서버가 백엔드로 추론 결과를 전송하면 이 화면에 확률과 리포트가 표시됩니다."}
+            </p>
+          </div>
+        ) : (
+          <div className="mt-6 space-y-4">
+            <div className="grid gap-4 lg:grid-cols-[320px_1fr]">
+              <aside className="rounded-2xl bg-slate-950 p-6 text-white">
+                <FiCpu className="h-8 w-8 text-emerald-300" />
+                <p className="mt-5 text-sm font-bold text-slate-300">{stock.code}</p>
+                <h2 className="mt-1 text-3xl font-black">{stock.name}</h2>
+                <p className="mt-4 text-2xl font-black">{stock.price}</p>
+                <p className={`mt-1 text-sm font-black ${stock.change.startsWith("-") ? "text-blue-300" : "text-rose-300"}`}>
+                  {stock.change}
+                </p>
+              </aside>
+
+              <div className="grid gap-4 md:grid-cols-3">
+                {predictionItems.map((item) => (
+                  <ProbabilityRing
+                    key={item.key}
+                    label={item.label}
+                    value={result.prediction[item.key]}
+                    color={item.color}
+                    desc={item.desc}
+                  />
                 ))}
+              </div>
             </div>
-          </article>
 
-          <div className="grid gap-3 rounded-2xl border border-slate-100 bg-white p-4 text-xs font-bold text-slate-500 shadow-[0_12px_32px_rgba(15,23,42,0.04)] md:grid-cols-3">
-            <div className="flex items-center justify-between gap-3 rounded-xl bg-slate-50 px-4 py-3">
-              <span>모델 판단</span>
-              <span className="font-black text-slate-950">{displayResult.signal ?? dominant.label} 우위</span>
+            <div className="grid gap-3 rounded-2xl border border-slate-100 bg-white p-4 text-xs font-bold text-slate-500 shadow-[0_12px_32px_rgba(15,23,42,0.04)] md:grid-cols-3">
+              <div className="flex items-center justify-between gap-3 rounded-xl bg-slate-50 px-4 py-3">
+                <span>모델 판단</span>
+                <span className="font-black text-slate-950">{result.signal ?? dominant?.label} 우위</span>
+              </div>
+              <div className="flex items-center justify-between gap-3 rounded-xl bg-slate-50 px-4 py-3">
+                <span>추론 시각</span>
+                <span className="font-black text-slate-950">{formatInferenceTime(result.tradeDatetime)}</span>
+              </div>
+              <div className="flex items-center justify-between gap-3 rounded-xl bg-slate-50 px-4 py-3">
+                <span>모델 버전</span>
+                <span className="font-black text-slate-950">{result.modelVersion ?? "-"}</span>
+              </div>
             </div>
-            <div className="flex items-center justify-between gap-3 rounded-xl bg-slate-50 px-4 py-3">
-              <span>추론 시각</span>
-              <span className="font-black text-slate-950">{isPreview ? "수신 대기" : formatInferenceTime(displayResult.tradeDatetime)}</span>
-            </div>
-            <div className="flex items-center justify-between gap-3 rounded-xl bg-slate-50 px-4 py-3">
-              <span>모델 버전</span>
-              <span className="font-black text-slate-950">{displayResult.modelVersion ?? "-"}</span>
+
+            <div className="space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
+                <div>
+                  <p className="text-xs font-black uppercase text-[#5267ff]">Inference Insight</p>
+                  <h2 className="mt-1 text-2xl font-black text-slate-950">추론 결과 분석 리포트</h2>
+                </div>
+                <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-black text-emerald-700">실제 응답</span>
+              </div>
+
+              <div className="text-base font-normal text-slate-950">
+                모델 최종 판단: {result.signal} | 확신도: {result.confidence}%
+              </div>
+
+              {reportCards.slice(0, 1).map((card) => (
+                <article key={card.title} className={`rounded-2xl border p-6 shadow-[0_12px_32px_rgba(15,23,42,0.04)] ${cardToneClass(card.tone)}`}>
+                  <p className={`text-xs font-black uppercase ${cardEyebrowClass(card.tone)}`}>{card.eyebrow}</p>
+                  <h3 className="mt-3 text-2xl font-black text-slate-950">{card.title}</h3>
+                  <div className="mt-5 space-y-2 text-sm font-bold leading-7 text-slate-600">
+                    {card.body.map((paragraph, paragraphIndex) => (
+                      <p key={`${card.title}-${paragraphIndex}`}>{paragraph}</p>
+                    ))}
+                  </div>
+                </article>
+              ))}
+
+              <div className="grid gap-4 lg:grid-cols-2">
+                {reportCards.slice(1).map((card, index) => (
+                  <article key={card.title} className={`rounded-2xl border p-5 shadow-[0_12px_32px_rgba(15,23,42,0.04)] ${cardToneClass(card.tone)}`}>
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className={`text-xs font-black uppercase ${cardEyebrowClass(card.tone)}`}>{card.eyebrow}</p>
+                        <h3 className="mt-2 text-lg font-black text-slate-950">{card.title}</h3>
+                      </div>
+                      <span className="rounded-full bg-slate-50 px-3 py-1 text-xs font-black text-slate-400">
+                        {String(index + 3).padStart(2, "0")}
+                      </span>
+                    </div>
+                    <div className="mt-4 space-y-2 text-sm font-bold leading-7 text-slate-600">
+                      {card.body.map((paragraph, paragraphIndex) => (
+                        <p key={`${card.title}-${paragraphIndex}`}>{paragraph}</p>
+                      ))}
+                    </div>
+                  </article>
+                ))}
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )}
       </section>
 
       {pendingCart ? (

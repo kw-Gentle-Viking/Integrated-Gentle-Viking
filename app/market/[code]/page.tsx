@@ -3,7 +3,6 @@
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { FiArrowLeft, FiHeart, FiShoppingBag } from "react-icons/fi";
-import { mockPopularStocks } from "@/lib/dashboard/mock";
 import CandleChart from "@/components/chart/CandleChart";
 import CartConfirmModal from "@/components/stock-list/CartConfirmModal";
 import TradeModal from "@/components/market/TradeModal";
@@ -26,8 +25,6 @@ export default function StockDetailPage() {
   const { code } = useParams<{ code: string }>();
   const router = useRouter();
   const { toggleFavorite, toggleCart, isFavorite, isInCart } = useStockList();
-
-  const mockStock = mockPopularStocks.find((s) => s.code === code);
 
   const [currentPrice, setCurrentPrice] = useState<StockCurrentPrice | null>(null);
   const [candles, setCandles] = useState<CandleType[]>([]);
@@ -66,10 +63,10 @@ export default function StockDetailPage() {
     return () => { cancelled = true; };
   }, [code, chartRange.key]);
 
-  const name = currentPrice?.name ?? mockStock?.name ?? code;
-  const priceStr = currentPrice?.priceFormatted ?? mockStock?.price ?? "-";
-  const changeStr = currentPrice?.changeFormatted ?? mockStock?.change ?? "-";
-  const isUp = currentPrice?.isUp ?? mockStock?.isUp ?? false;
+  const name = currentPrice?.name ?? code;
+  const priceStr = currentPrice?.priceFormatted ?? "-";
+  const changeStr = currentPrice?.changeFormatted ?? "-";
+  const isUp = currentPrice?.isUp ?? false;
 
   const stockListItem = {
     code,

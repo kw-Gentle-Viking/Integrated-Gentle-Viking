@@ -3,7 +3,6 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { FiArrowLeft, FiChevronRight, FiHeart, FiShoppingBag, FiTrendingUp } from "react-icons/fi";
-import { mockPopularStocks } from "@/lib/dashboard/mock";
 import { fetchVolumeRank } from "@/lib/api/prices";
 import type { RankedStock } from "@/lib/api/prices";
 import { useStockList } from "@/lib/stock-list/StockListContext";
@@ -88,15 +87,17 @@ function StockRow({ stock }: { stock: RankedStock }) {
 export default function MarketPage() {
   const router = useRouter();
   const [search, setSearch] = useState("");
-  const [ranking, setRanking] = useState<RankedStock[]>(() =>
-    mockPopularStocks.map((s) => ({ ...s })),
-  );
+  const [ranking, setRanking] = useState<RankedStock[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     fetchVolumeRank()
-      .then(setRanking)
-      .catch(() => {/* 실패 시 mock 유지 */})
+      .then((data) => { setRanking(data); setError(null); })
+      .catch((err: unknown) => {
+        setRanking([]);
+        setError(err instanceof Error ? err.message : "실시간 랭킹을 불러오지 못했습니다.");
+      })
       .finally(() => setLoading(false));
   }, []);
 
@@ -146,6 +147,10 @@ export default function MarketPage() {
         {loading ? (
           <div className="flex h-40 items-center justify-center">
             <div className="h-6 w-6 animate-spin rounded-full border-2 border-slate-200 border-t-[#5267ff]" />
+          </div>
+        ) : error ? (
+          <div className="py-10 text-center text-sm font-bold text-rose-500">
+            {error}
           </div>
         ) : (
           <div className="divide-y divide-slate-50">
