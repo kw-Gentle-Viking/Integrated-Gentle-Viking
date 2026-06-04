@@ -3,9 +3,10 @@
 import { useCallback, useEffect, useState } from "react";
 import { FiActivity, FiCpu, FiPlay, FiRefreshCw, FiSquare, FiZap } from "react-icons/fi";
 import PortfolioAside from "@/components/portfolio/PortfolioAside";
+import PortfolioStockTradeModal from "@/components/portfolio/PortfolioStockTradeModal";
 import PortfolioSummaryCards from "@/components/portfolio/PortfolioSummaryCards";
 import PortfolioTable from "@/components/portfolio/PortfolioTable";
-import { useStockList } from "@/lib/stock-list/StockListContext";
+import { StockListItem, useStockList } from "@/lib/stock-list/StockListContext";
 import { apiFetch } from "@/lib/signup/auth";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
@@ -143,6 +144,7 @@ export default function PortfolioPage() {
   const [tradeMessage, setTradeMessage] = useState<string | null>(null);
   const [tradeError, setTradeError] = useState<string | null>(null);
   const [marketStatus, setMarketStatus] = useState<MarketStatus>(() => getKoreanMarketStatus());
+  const [selectedStock, setSelectedStock] = useState<StockListItem | null>(null);
 
   const totalValue = cartStocks.reduce(
     (sum, stock) => sum + parseWon(stock.price),
@@ -336,7 +338,7 @@ export default function PortfolioPage() {
             totalValue={formatWon(totalValue)}
             stockCount={cartStocks.length}
           />
-          <PortfolioTable stocks={cartStocks} />
+          <PortfolioTable stocks={cartStocks} onSelectStock={setSelectedStock} />
         </div>
 
         <div className="rounded-2xl bg-white p-6 shadow-[0_24px_80px_rgba(15,23,42,0.06)] lg:p-8">
@@ -480,6 +482,13 @@ export default function PortfolioPage() {
       </section>
 
       <PortfolioAside stocks={cartStocks} />
+
+      {selectedStock ? (
+        <PortfolioStockTradeModal
+          stock={selectedStock}
+          onClose={() => setSelectedStock(null)}
+        />
+      ) : null}
     </div>
   );
 }

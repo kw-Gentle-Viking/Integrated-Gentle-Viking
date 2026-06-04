@@ -2,9 +2,10 @@ import type { StockListItem } from "@/lib/stock-list/StockListContext";
 
 type PortfolioTableProps = {
   stocks: StockListItem[];
+  onSelectStock?: (stock: StockListItem) => void;
 };
 
-export default function PortfolioTable({ stocks }: PortfolioTableProps) {
+export default function PortfolioTable({ stocks, onSelectStock }: PortfolioTableProps) {
   return (
     <div className="mt-8 overflow-hidden rounded-xl border border-slate-100">
       <div className="grid grid-cols-[1.4fr_0.8fr_0.9fr_0.9fr_0.7fr] bg-slate-50 px-5 py-3 text-xs font-bold text-slate-400">
@@ -16,9 +17,11 @@ export default function PortfolioTable({ stocks }: PortfolioTableProps) {
       </div>
       {stocks.length > 0 ? (
         stocks.map((stock) => (
-          <div
+          <button
             key={stock.code}
-            className="grid grid-cols-[1.4fr_0.8fr_0.9fr_0.9fr_0.7fr] items-center border-t border-slate-100 px-5 py-4 text-sm"
+            type="button"
+            onClick={() => onSelectStock?.(stock)}
+            className="grid w-full grid-cols-[1.4fr_0.8fr_0.9fr_0.9fr_0.7fr] items-center border-t border-slate-100 px-5 py-4 text-left text-sm transition hover:bg-slate-50 focus:outline-none focus-visible:bg-slate-50 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#5267ff]"
           >
             <div className="flex items-center gap-3">
               <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-100 font-black">
@@ -39,7 +42,7 @@ export default function PortfolioTable({ stocks }: PortfolioTableProps) {
             >
               {stock.change}
             </span>
-          </div>
+          </button>
         ))
       ) : (
         <div className="border-t border-slate-100 px-5 py-12 text-center">
