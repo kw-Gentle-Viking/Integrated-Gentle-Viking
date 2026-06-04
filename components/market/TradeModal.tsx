@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { FiX, FiAlertTriangle, FiCheckCircle } from "react-icons/fi";
 import { placeOrder } from "@/lib/api/trade";
+import { invalidateAccountAssets } from "@/lib/account/assetsStore";
 import type { OrderSide, PriceType } from "@/lib/api/trade";
 
 interface Props {
@@ -50,6 +51,7 @@ export default function TradeModal({ stock, initialSide, onClose }: Props) {
         priceType,
       });
       setResultMsg(result.message || "주문이 완료됐습니다.");
+      invalidateAccountAssets();
       setStatus("success");
     } catch (err) {
       setResultMsg(err instanceof Error ? err.message : "주문 처리 중 오류가 발생했습니다.");

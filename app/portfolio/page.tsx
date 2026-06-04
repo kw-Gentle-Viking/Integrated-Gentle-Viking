@@ -56,6 +56,33 @@ type TradeActionPayload = {
   tickers?: string[];
 };
 
+type MarketStatus = {
+  label: string;
+  isOpen: boolean;
+};
+
+function getKoreanMarketStatus(date = new Date()): MarketStatus {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Seoul",
+    weekday: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(date);
+  const getPart = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((part) => part.type === type)?.value ?? "";
+  const weekday = getPart("weekday");
+  const hour = Number(getPart("hour"));
+  const minute = Number(getPart("minute"));
+  const totalMinutes = hour * 60 + minute;
+  const isWeekend = weekday === "Sat" || weekday === "Sun";
+
+  if (isWeekend) return { label: "주말 휴장", isOpen: false };
+  if (totalMinutes < 9 * 60) return { label: "장 개장 전", isOpen: false };
+  if (totalMinutes <= 15 * 60 + 30) return { label: "장중", isOpen: true };
+  return { label: "장 마감", isOpen: false };
+}
+
 function parseWon(value: string) {
   const parsed = Number(value.replace(/[^0-9.-]/g, ""));
   return Number.isFinite(parsed) ? parsed : 0;
@@ -115,6 +142,7 @@ export default function PortfolioPage() {
   const [isLoadingPredictions, setIsLoadingPredictions] = useState(false);
   const [tradeMessage, setTradeMessage] = useState<string | null>(null);
   const [tradeError, setTradeError] = useState<string | null>(null);
+  const [marketStatus, setMarketStatus] = useState<MarketStatus>(() => getKoreanMarketStatus());
 
   const totalValue = cartStocks.reduce(
     (sum, stock) => sum + parseWon(stock.price),
@@ -215,11 +243,27 @@ export default function PortfolioPage() {
     void loadPortfolioPredictions();
   }, [loadPortfolioPredictions]);
 
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setMarketStatus(getKoreanMarketStatus());
+    }, 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
   const refreshAll = async () => {
     await Promise.all([loadTradeState(), loadPortfolioPredictions()]);
   };
 
   const runTradeAction = async (action: "start" | "stop" | "once") => {
+    const currentMarketStatus = getKoreanMarketStatus();
+    setMarketStatus(currentMarketStatus);
+
+    if ((action === "start" || action === "once") && !currentMarketStatus.isOpen) {
+      setTradeMessage(null);
+      setTradeError(`현재 ${currentMarketStatus.label} 상태라 자동매매를 시작할 수 없습니다. 국내 정규장(09:00-15:30)에 다시 시도해주세요.`);
+      return;
+    }
+
     setIsLoadingTrade(true);
     setTradeError(null);
     setTradeMessage(null);
@@ -270,6 +314,7 @@ export default function PortfolioPage() {
   };
 
   const isRunning = tradeStatus?.status === "RUNNING";
+  const canRequestTrade = marketStatus.isOpen && cartStocks.length > 0;
 
   return (
     <div className="grid gap-6 xl:grid-cols-[1fr_320px]">
@@ -313,7 +358,7 @@ export default function PortfolioPage() {
             <button
               type="button"
               onClick={() => void runTradeAction("start")}
-              disabled={isLoadingTrade || cartStocks.length === 0}
+              disabled={isLoadingTrade || !canRequestTrade}
               className="inline-flex h-11 items-center gap-2 rounded-xl bg-[#5267ff] px-4 text-sm font-black text-white transition hover:bg-[#4054e8] disabled:cursor-not-allowed disabled:opacity-50"
             >
               <FiPlay className="h-4 w-4" /> 자동매매 시작
@@ -321,7 +366,7 @@ export default function PortfolioPage() {
             <button
               type="button"
               onClick={() => void runTradeAction("once")}
-              disabled={isLoadingTrade || cartStocks.length === 0}
+              disabled={isLoadingTrade || !canRequestTrade}
               className="inline-flex h-11 items-center gap-2 rounded-xl border border-slate-200 px-4 text-sm font-black text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
             >
               <FiZap className="h-4 w-4" /> {isLoadingTrade ? "AI 분석 대기" : "1회 분석/실행"}
@@ -347,6 +392,11 @@ export default function PortfolioPage() {
           {cartStocks.length === 0 ? (
             <div className="mt-5 rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3 text-sm font-bold text-amber-700">
               자동매매를 시작하려면 AI 리포트나 종목 랭킹에서 포트폴리오에 종목을 먼저 담아주세요.
+            </div>
+          ) : null}
+          {!marketStatus.isOpen ? (
+            <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-600">
+              현재 {marketStatus.label} 상태입니다. 자동매매 시작과 1회 분석/실행은 국내 정규장(09:00-15:30)에만 가능합니다.
             </div>
           ) : null}
           {tradeMessage ? (

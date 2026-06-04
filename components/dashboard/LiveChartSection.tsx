@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { FiTrendingUp } from "react-icons/fi";
 import type { CandleType } from "@/lib/chart/types";
@@ -36,6 +36,7 @@ export default function LiveChartSection() {
   const [currentPrice, setCurrentPrice] = useState<StockCurrentPrice | null>(null);
   const [chartLoading, setChartLoading] = useState(true);
   const [chartError, setChartError] = useState<string | null>(null);
+  const [chartRetryKey, setChartRetryKey] = useState(0);
 
   // 거래량 순위 조회
   useEffect(() => {
@@ -57,25 +58,26 @@ export default function LiveChartSection() {
     return () => { cancelled = true; };
   }, [selectedCode]);
 
-  // 차트 데이터 조회
-  useEffect(() => {
-    let cancelled = false;
+  const loadChart = useCallback(async () => {
     setChartLoading(true);
     setChartError(null);
-    const fetcher = chartRange.key === "1D"
-      ? fetchIntradayCandles(selectedCode)
-      : fetchChartCandles(selectedCode, chartRange.key);
-    fetcher
-      .then((data) => { if (!cancelled) { setCandles(data); setChartLoading(false); } })
-      .catch((err: unknown) => {
-        if (!cancelled) {
-          setChartError(err instanceof Error ? err.message : "데이터 조회 실패");
-          setCandles([]);
-          setChartLoading(false);
-        }
-      });
-    return () => { cancelled = true; };
+
+    try {
+      const data = chartRange.key === "1D"
+        ? await fetchIntradayCandles(selectedCode)
+        : await fetchChartCandles(selectedCode, chartRange.key);
+      setCandles(data);
+    } catch (err: unknown) {
+      setChartError(err instanceof Error ? err.message : "데이터 조회 실패");
+    } finally {
+      setChartLoading(false);
+    }
   }, [selectedCode, chartRange.key]);
+
+  // 차트 데이터 조회
+  useEffect(() => {
+    void loadChart();
+  }, [loadChart, chartRetryKey]);
 
   const selectedRanked = ranking.find((s) => s.code === selectedCode);
   const displayName   = currentPrice?.name   ?? selectedRanked?.name   ?? selectedCode;
@@ -103,24 +105,31 @@ export default function LiveChartSection() {
           </div>
         </div>
 
-        {chartLoading ? (
+        {chartLoading && candles.length === 0 ? (
           <div className="flex h-[316px] items-center justify-center rounded-2xl border border-slate-100 bg-slate-50">
             <div className="h-6 w-6 animate-spin rounded-full border-2 border-slate-200 border-t-[#5267ff]" />
           </div>
-        ) : chartError ? (
+        ) : chartError && candles.length === 0 ? (
           <div className="flex h-[316px] flex-col items-center justify-center gap-2 rounded-2xl border border-slate-100 bg-slate-50">
             <p className="text-sm font-bold text-slate-400">{chartError}</p>
             <button
               type="button"
-              onClick={(e) => { e.stopPropagation(); setChartRange({ ...chartRange }); }}
+              onClick={(e) => { e.stopPropagation(); setChartRetryKey((key) => key + 1); }}
               className="rounded-lg bg-slate-100 px-3 py-1.5 text-xs font-bold text-slate-600 transition hover:bg-slate-200"
             >
               다시 시도
             </button>
           </div>
         ) : candles.length > 0 ? (
-          <div className="overflow-hidden rounded-2xl border border-slate-100">
+          <div className="relative overflow-hidden rounded-2xl border border-slate-100">
             <CandleChart candles={candles} height={316} />
+            {(chartLoading || chartError) ? (
+              <div className="pointer-events-none absolute inset-x-3 top-3 flex justify-end">
+                <span className="rounded-full bg-white/90 px-3 py-1 text-xs font-black text-slate-500 shadow-sm">
+                  {chartLoading ? "업데이트 중" : "마지막 정상 차트"}
+                </span>
+              </div>
+            ) : null}
           </div>
         ) : (
           <div className="flex h-[316px] items-center justify-center rounded-2xl border border-slate-100 bg-slate-50 text-sm font-bold text-slate-400">

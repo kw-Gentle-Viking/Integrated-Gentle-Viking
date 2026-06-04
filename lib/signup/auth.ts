@@ -211,6 +211,27 @@ export async function signupUser({
     };
 
     writeUsers([...readUsers(), user]);
+
+    const loginRes = await fetch(API_BASE + "/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password: basic.pw1 }),
+    });
+
+    if (!loginRes.ok) {
+      return { ok: false, message: "회원가입은 완료됐지만 자동 로그인에 실패했습니다. 로그인 화면에서 다시 로그인해주세요." };
+    }
+
+    const tokens = (await loginRes.json()) as {
+      access_token: string;
+      refresh_token: string;
+      token_type: string;
+    };
+
+    if (canUseStorage()) {
+      window.localStorage.setItem(ACCESS_TOKEN_KEY, tokens.access_token);
+      window.localStorage.setItem(REFRESH_TOKEN_KEY, tokens.refresh_token);
+    }
     writeSession(user.email);
 
     return { ok: true, user: toAuthUser(user) };

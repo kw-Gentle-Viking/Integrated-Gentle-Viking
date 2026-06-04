@@ -21,8 +21,6 @@ function getMarketStatus(): { label: string; isOpen: boolean } {
   const kstHour = (now.getUTCHours() + 9) % 24;
   const kstMin  = now.getUTCMinutes();
   const totalMin = kstHour * 60 + kstMin;
-  const day = (now.getUTCDay() + (now.getUTCHours() >= 15 ? 1 : 0)) % 7; // 주말 체크용 근사
-
   const isWeekend = now.getDay() === 0 || now.getDay() === 6;
   if (isWeekend) return { label: "주말 휴장", isOpen: false };
   if (totalMin < 9 * 60)           return { label: "장 개장 전", isOpen: false };
@@ -34,7 +32,6 @@ export default function MarketOverviewSection() {
   const [indices, setIndices] = useState<MarketIndexItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [marketStatus, setMarketStatus] = useState(getMarketStatus);
-  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const timer = setInterval(() => setMarketStatus(getMarketStatus()), 60_000);
@@ -43,11 +40,8 @@ export default function MarketOverviewSection() {
 
   useEffect(() => {
     fetchMarketOverview()
-      .then((data) => { setIndices(data); setError(null); })
-      .catch((err: unknown) => {
-        setIndices([]);
-        setError(err instanceof Error ? err.message : "시장 개요를 불러오지 못했습니다.");
-      })
+      .then((data) => setIndices(data))
+      .catch(() => setIndices([]))
       .finally(() => setLoading(false));
   }, []);
 
@@ -71,14 +65,16 @@ export default function MarketOverviewSection() {
         </span>
       </div>
 
-      {error ? (
-        <div className="rounded-xl border border-rose-100 bg-rose-50 px-4 py-3 text-sm font-bold text-rose-600">
-          {error}
-        </div>
-      ) : null}
-
       <div className="grid gap-3 md:grid-cols-3">
-        {indices.map((index) => (
+        {loading ? (
+          ["달러 환율", "코스피", "코스닥"].map((name) => (
+            <div key={name} className="rounded-xl border border-slate-100 bg-slate-50/70 p-3">
+              <p className="text-sm font-bold text-slate-500">{name}</p>
+              <p className="mt-1 text-2xl font-black text-slate-300">불러오는 중</p>
+              <p className="mt-0.5 text-sm font-black text-slate-300">-</p>
+            </div>
+          ))
+        ) : indices.map((index) => (
           <div
             key={index.name}
             className="rounded-xl border border-slate-100 bg-slate-50/70 p-3"
@@ -95,9 +91,9 @@ export default function MarketOverviewSection() {
             </div>
           </div>
         ))}
-        {!loading && !error && indices.length === 0 ? (
+        {!loading && indices.length === 0 ? (
           <div className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-8 text-center text-sm font-bold text-slate-400 md:col-span-3">
-            수신된 시장 데이터가 없습니다.
+            시장 데이터를 불러오는 중입니다.
           </div>
         ) : null}
       </div>

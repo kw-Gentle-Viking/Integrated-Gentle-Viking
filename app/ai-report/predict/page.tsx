@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { FiAlertCircle, FiArrowLeft, FiCpu, FiRefreshCw, FiShoppingBag } from "react-icons/fi";
 import { apiFetch } from "@/lib/signup/auth";
+import { startPredictionJob, useEnsurePredictionJob, usePredictionJob } from "@/lib/ai/predictionJobStore";
 import CartConfirmModal from "@/components/stock-list/CartConfirmModal";
 import { StockListItem, useStockList } from "@/lib/stock-list/StockListContext";
 
@@ -21,18 +22,15 @@ type StockPrediction = {
   change: string;
 };
 
-type BackendPrediction = {
-  ticker?: string;
-  signal?: "BUY" | "HOLD" | "SELL" | string;
-  confidence?: number;
-  prob_buy?: number;
-  prob_hold?: number;
-  prob_sell?: number;
-  trade_datetime?: string;
-  model_version?: string;
-  report?: string;
-  gemini_report?: string;
-  analysis?: string;
+type AgreementAnalysis = {
+  status: string;
+  recommendation_signal: string;
+  tft_signal: string;
+  alignment_label: string;
+  alignment_level: "aligned" | "partial" | "diverged" | string;
+  summary: string;
+  interpretation: string;
+  action_note: string;
 };
 
 type PredictionResult = {
@@ -64,40 +62,18 @@ const predictionItems = [
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
-const signalLabel: Record<string, string> = {
-  BUY: "매수",
-  HOLD: "관망",
-  SELL: "매도",
-};
-
-function toPercent(value: unknown) {
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric)) return 0;
-  const percent = numeric <= 1 ? numeric * 100 : numeric;
-  return Math.max(0, Math.min(100, Math.round(percent)));
+function normalizeSignalCode(value: string) {
+  const upper = value.toUpperCase();
+  if (upper.includes("BUY") || value.includes("매수") || value.includes("비중확대")) return "BUY";
+  if (upper.includes("SELL") || value.includes("매도") || value.includes("제외")) return "SELL";
+  if (upper.includes("HOLD") || value.includes("관망") || value.includes("보류")) return "HOLD";
+  return "HOLD";
 }
 
-function normalizePrediction(data: BackendPrediction): PredictionResult {
-  const prediction = {
-    buy: toPercent(data.prob_buy),
-    hold: toPercent(data.prob_hold),
-    sell: toPercent(data.prob_sell),
-  };
-  const signal = signalLabel[String(data.signal ?? "").toUpperCase()] ?? "관망";
-  const confidence = toPercent(data.confidence);
-
-  return {
-    prediction,
-    signal,
-    confidence,
-    tradeDatetime: data.trade_datetime,
-    modelVersion: data.model_version,
-    report:
-      data.report ||
-      data.gemini_report ||
-      data.analysis ||
-      "백엔드 응답에 상세 분석 리포트가 포함되지 않았습니다.",
-  };
+function agreementTone(level?: string) {
+  if (level === "aligned") return "border-emerald-100 bg-emerald-50 text-emerald-700";
+  if (level === "partial") return "border-amber-100 bg-amber-50 text-amber-700";
+  return "border-rose-100 bg-rose-50 text-rose-700";
 }
 
 function formatInferenceTime(value?: string) {
@@ -220,10 +196,6 @@ function cardEyebrowClass(tone: ReportCard["tone"]) {
   return "text-slate-400";
 }
 
-function delay(ms: number) {
-  return new Promise((resolve) => window.setTimeout(resolve, ms));
-}
-
 function ProbabilityRing({ label, value, color, desc }: { label: string; value: number; color: string; desc: string }) {
   const [animatedValue, setAnimatedValue] = useState(0);
 
@@ -268,61 +240,84 @@ function PredictContent() {
     price: searchParams.get("price") || "-",
     change: searchParams.get("change") || "-",
   };
+  const recommendationSignal = searchParams.get("recommendationSignal") || "";
+  const recommendationSummary = searchParams.get("recommendationSummary") || "";
+  const recommendationReasons = searchParams.get("recommendationReasons") || "";
   const stockListItem = makeStockListItem(stock);
   const { toggleCart, isInCart } = useStockList();
+  const { result, isLoading, errorMessage, requestMessage } = usePredictionJob(code);
   const [pendingCart, setPendingCart] = useState<StockListItem | null>(null);
-  const [result, setResult] = useState<PredictionResult | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [requestMessage, setRequestMessage] = useState<string | null>(null);
+  const [agreement, setAgreement] = useState<AgreementAnalysis | null>(null);
+  const [isAgreementLoading, setIsAgreementLoading] = useState(false);
 
-  const fetchPrediction = useCallback(async () => {
-    const res = await apiFetch(`${API_BASE}/ai/predictions/${encodeURIComponent(code)}`);
-    if (res.status === 404) return false;
-    if (!res.ok) throw new Error(`추론 결과 요청 실패 (${res.status})`);
+  useEnsurePredictionJob(code, stock.name);
 
-    const data = (await res.json()) as BackendPrediction;
-    setResult(normalizePrediction(data));
-    setErrorMessage(null);
-    setRequestMessage(null);
-    return true;
-  }, [code]);
+  const requestAgreement = useCallback(async (predictionResult: PredictionResult) => {
+    if (!recommendationSignal) {
+      setAgreement({
+        status: "missing_recommendation_context",
+        recommendation_signal: "-",
+        tft_signal: predictionResult.signal,
+        alignment_label: "추천 맥락 없음",
+        alignment_level: "partial",
+        summary: "추천 리포트에서 진입한 경우 합치성 분석이 표시됩니다.",
+        interpretation: "현재 페이지 URL에 추천 리포트의 판단과 근거가 포함되어 있지 않아 TFT 예측과 비교할 수 없습니다.",
+        action_note: "AI 추천 카드의 'AI 매매 확률 보기' 버튼으로 진입하면 추천 모델과 TFT 모델의 의견 차이를 함께 확인할 수 있습니다.",
+      });
+      return;
+    }
 
-  const requestPrediction = useCallback(async () => {
-    setIsLoading(true);
-    setResult(null);
-    setErrorMessage(null);
-    setRequestMessage(`${stock.name} 실제 AI 추론을 시작하는 중입니다.`);
-
+    setIsAgreementLoading(true);
     try {
-      const res = await apiFetch(`${API_BASE}/ai/predictions/request`, {
+      const res = await apiFetch(`${API_BASE}/ai/agreement`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ tickers: [code] }),
+        body: JSON.stringify({
+          ticker: stock.code,
+          name: stock.name,
+          recommendation_signal: recommendationSignal,
+          recommendation_summary: recommendationSummary,
+          recommendation_reasons: recommendationReasons,
+          tft_signal: normalizeSignalCode(predictionResult.signal),
+          confidence: predictionResult.confidence,
+          prob_buy: predictionResult.prediction.buy,
+          prob_hold: predictionResult.prediction.hold,
+          prob_sell: predictionResult.prediction.sell,
+        }),
       });
-      const payload = await res.json().catch(() => ({})) as { job_id?: string; detail?: string; message?: string };
-      if (!res.ok) throw new Error(payload.detail || payload.message || `추론 요청 실패 (${res.status})`);
-
-      setRequestMessage("AI 서버가 분석 중입니다. 결과 콜백이 도착하면 자동으로 화면이 전환됩니다.");
-
-      for (let attempt = 0; attempt < 24; attempt += 1) {
-        await delay(2500);
-        const hasResult = await fetchPrediction();
-        if (hasResult) return;
-      }
-
-      setErrorMessage("추론 요청은 전달됐지만 아직 AI 서버 콜백 결과가 도착하지 않았습니다. 새로고침을 눌러 다시 확인해주세요.");
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(payload.detail || `합치성 분석 실패 (${res.status})`);
+      setAgreement(payload as AgreementAnalysis);
     } catch (error) {
-      setResult(null);
-      setErrorMessage(error instanceof Error ? error.message : "추론 요청 중 오류가 발생했습니다.");
+      const tftSignal = predictionResult.signal;
+      setAgreement({
+        status: "fallback_frontend",
+        recommendation_signal: recommendationSignal,
+        tft_signal: tftSignal,
+        alignment_label: "분석 대기",
+        alignment_level: "partial",
+        summary: "추천 리포트와 TFT 예측의 관점 차이를 확인하는 중입니다.",
+        interpretation: error instanceof Error ? error.message : "합치성 분석을 불러오지 못했습니다.",
+        action_note: "잠시 후 새로고침하면 Gemini 해석이 다시 요청됩니다.",
+      });
     } finally {
-      setIsLoading(false);
+      setIsAgreementLoading(false);
     }
-  }, [code, fetchPrediction, stock.name]);
+  }, [recommendationReasons, recommendationSignal, recommendationSummary, stock.code, stock.name]);
 
   useEffect(() => {
-    void requestPrediction();
-  }, [requestPrediction]);
+    if (!result) {
+      setAgreement(null);
+      return;
+    }
+
+    void requestAgreement(result);
+  }, [requestAgreement, result]);
+
+  const requestPrediction = useCallback(() => {
+    setAgreement(null);
+    void startPredictionJob(code, stock.name, { force: true });
+  }, [code, stock.name]);
 
   const reportCards = useMemo(() => (result ? buildReportCards(result.report) : []), [result]);
 
@@ -342,7 +337,7 @@ function PredictContent() {
               투자 리포트로 돌아가기
             </Link>
             <p className="mt-5 text-sm font-bold text-[#5267ff]">AI Prediction</p>
-            <h1 className="mt-2 text-4xl font-black text-slate-950">{stock.name} AI 예측</h1>
+            <h1 className="mt-2 text-4xl font-black text-slate-950">{stock.name} AI 매매 확률 예측</h1>
             <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-500">
               Temporal Fusion Transformer가 백엔드와 AI 서버를 거쳐 실제 추론한 매수, 관망, 매도 확률을 표시합니다.
             </p>
@@ -448,6 +443,21 @@ function PredictContent() {
 
               <div className="text-base font-normal text-slate-950">
                 모델 최종 판단: {result.signal} | 확신도: {result.confidence}%
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2 text-base font-normal text-slate-950">
+                {isAgreementLoading && !agreement ? (
+                  <span className="text-slate-500">추천 결과: 분석 중 | 모델 추론 결과: {result.signal}</span>
+                ) : agreement ? (
+                  <span>
+                    추천 결과: {agreement.recommendation_signal} | 모델 추론 결과: {agreement.tft_signal}
+                  </span>
+                ) : (
+                  <span>추천 결과: - | 모델 추론 결과: {result.signal}</span>
+                )}
+                <span className={`rounded-full border px-3 py-1 text-xs font-black ${agreementTone(agreement?.alignment_level)}`}>
+                  {isAgreementLoading ? "분석 중" : agreement?.alignment_label ?? "분석 대기"}
+                </span>
               </div>
 
               {reportCards.slice(0, 1).map((card) => (

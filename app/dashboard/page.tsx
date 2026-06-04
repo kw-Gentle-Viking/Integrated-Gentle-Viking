@@ -14,8 +14,24 @@ import {
 } from "@/lib/dashboard/mock";
 import LiveChartSection from "@/components/dashboard/LiveChartSection";
 import MarketOverviewSection from "@/components/dashboard/MarketOverviewSection";
+import { useAccountAssets } from "@/lib/account/assetsStore";
+
+function formatWon(value: number) {
+  return `${value.toLocaleString("ko-KR")}원`;
+}
+
+function formatRate(value: number) {
+  const sign = value >= 0 ? "+" : "";
+  return `${sign}${value.toFixed(2)}%`;
+}
 
 export default function DashboardPage() {
+  const { assets, error: assetsError } = useAccountAssets();
+
+  const totalAssetsText = assets ? formatWon(assets.totalKRW) : assetsError ? "조회 실패" : "불러오는 중";
+  const accountText = assets ? `${assets.broker} ${assets.accountNo}` : "계좌 조회 중";
+  const pnlText = assets ? `${formatWon(assets.investedPnlKRW)} (${formatRate(assets.investedPnlRate)})` : "-";
+  const cashText = assets ? formatWon(assets.cashKRW) : "-";
   return (
     <div className="space-y-4">
       <section className="grid items-stretch gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
@@ -26,16 +42,16 @@ export default function DashboardPage() {
           className="block rounded-2xl bg-blue-50 p-4 text-slate-800 shadow-[0_20px_60px_rgba(82,103,255,0.10)] transition hover:-translate-y-0.5 hover:bg-blue-100/60 hover:shadow-[0_28px_90px_rgba(82,103,255,0.16)]"
         >
           <p className="text-sm font-bold text-blue-500">내 자산</p>
-          <p className="mt-2 text-2xl font-black text-slate-900">139만 7,380원</p>
-          <p className="mt-2 text-sm font-bold text-blue-400">+2.37% 오늘</p>
+          <p className="mt-2 text-2xl font-black text-slate-900">{totalAssetsText}</p>
+          <p className="mt-2 text-sm font-bold text-blue-400">{accountText}</p>
           <div className="mt-4 grid grid-cols-2 gap-3">
             <div className="rounded-xl bg-white/70 p-2.5 ring-1 ring-blue-100">
-              <p className="text-xs text-slate-400">수익</p>
-              <p className="mt-1 font-black text-slate-800">+29,770원</p>
+              <p className="text-xs text-slate-400">평가손익</p>
+              <p className="mt-1 font-black text-slate-800">{pnlText}</p>
             </div>
             <div className="rounded-xl bg-white/70 p-2.5 ring-1 ring-blue-100">
               <p className="text-xs text-slate-400">현금</p>
-              <p className="mt-1 font-black text-slate-800">86,539원</p>
+              <p className="mt-1 font-black text-slate-800">{cashText}</p>
             </div>
           </div>
         </Link>

@@ -1,11 +1,26 @@
 import type { ReportSource, ReportStock } from "@/lib/ai-report/types";
 
 export function getPredictHref(stock: ReportStock) {
+  const recommendationReasons = [
+    stock.reasons.news.summary,
+    stock.reasons.news.details,
+    stock.reasons.disclosure.summary,
+    stock.reasons.disclosure.details,
+    stock.reasons.flow.summary,
+    stock.reasons.flow.details,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .slice(0, 1200);
+
   const params = new URLSearchParams({
     code: stock.code,
     name: stock.name,
     price: stock.price,
     change: stock.change,
+    recommendationSignal: stock.signal,
+    recommendationSummary: stock.summary.slice(0, 500),
+    recommendationReasons,
   });
 
   return `/ai-report/predict?${params.toString()}`;
