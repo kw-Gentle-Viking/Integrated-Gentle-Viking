@@ -145,6 +145,7 @@ export default function PortfolioPage() {
   const [tradeError, setTradeError] = useState<string | null>(null);
   const [marketStatus, setMarketStatus] = useState<MarketStatus>(() => getKoreanMarketStatus());
   const [selectedStock, setSelectedStock] = useState<StockListItem | null>(null);
+  const [autoTradeEnabled, setAutoTradeEnabled] = useState(false);
 
   const totalValue = cartStocks.reduce(
     (sum, stock) => sum + parseWon(stock.price),
@@ -225,7 +226,11 @@ export default function PortfolioPage() {
       ]);
 
       if (statusRes.ok) {
-        setTradeStatus((await statusRes.json()) as TradeStatus);
+        const status = (await statusRes.json()) as TradeStatus;
+        setTradeStatus(status);
+        if (status.status === "RUNNING") {
+          setAutoTradeEnabled(true);
+        }
       }
 
       if (historyRes.ok) {
@@ -259,6 +264,12 @@ export default function PortfolioPage() {
   const runTradeAction = async (action: "start" | "stop" | "once") => {
     const currentMarketStatus = getKoreanMarketStatus();
     setMarketStatus(currentMarketStatus);
+
+    if ((action === "start" || action === "once") && !autoTradeEnabled) {
+      setTradeMessage(null);
+      setTradeError("자동매매가 OFF 상태입니다. 자동매매를 켠 뒤 다시 시도해주세요.");
+      return;
+    }
 
     if ((action === "start" || action === "once") && !currentMarketStatus.isOpen) {
       setTradeMessage(null);
@@ -316,7 +327,18 @@ export default function PortfolioPage() {
   };
 
   const isRunning = tradeStatus?.status === "RUNNING";
-  const canRequestTrade = marketStatus.isOpen && cartStocks.length > 0;
+  const canRequestTrade = autoTradeEnabled && marketStatus.isOpen && cartStocks.length > 0;
+
+  const handleAutoTradeToggle = () => {
+    const nextEnabled = !autoTradeEnabled;
+    setAutoTradeEnabled(nextEnabled);
+    setTradeMessage(null);
+    setTradeError(null);
+
+    if (!nextEnabled && isRunning) {
+      void runTradeAction("stop");
+    }
+  };
 
   return (
     <div className="grid gap-6 xl:grid-cols-[1fr_320px]">
@@ -342,142 +364,165 @@ export default function PortfolioPage() {
         </div>
 
         <div className="rounded-2xl bg-white p-6 shadow-[0_24px_80px_rgba(15,23,42,0.06)] lg:p-8">
-          <div className="flex flex-wrap items-start justify-between gap-4 border-b border-slate-100 pb-5">
-            <div>
+          <div className="border-b border-slate-100 pb-5">
+            <div className="min-w-0">
               <p className="text-sm font-bold text-[#5267ff]">AI Auto Trading</p>
-              <h2 className="mt-2 text-2xl font-black text-slate-950">실시간 AI 자동 거래</h2>
+              <div className="mt-2 flex flex-wrap items-center justify-between gap-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h2 className="text-2xl font-black text-slate-950">실시간 AI 자동 거래</h2>
+                  <div className="flex items-center gap-2 rounded-full bg-slate-100 px-3 py-1.5 text-xs font-black text-slate-500">
+                    <span className={`h-2.5 w-2.5 rounded-full ${isRunning ? "bg-emerald-400" : "bg-slate-300"}`} />
+                    {isRunning ? "실행 중" : "중지됨"}
+                  </div>
+                </div>
+                <div className="ml-auto flex shrink-0 items-center gap-2">
+                  <span className="text-xs font-black text-slate-500">자동매매</span>
+                  <button
+                    type="button"
+                    onClick={handleAutoTradeToggle}
+                    aria-label="자동매매 켜기 끄기"
+                    aria-pressed={autoTradeEnabled}
+                    className={`relative h-7 w-12 rounded-full p-1 transition ${autoTradeEnabled ? "bg-[#5267ff]" : "bg-slate-300"}`}
+                  >
+                    <span className={`block h-5 w-5 rounded-full bg-white shadow-sm transition ${autoTradeEnabled ? "translate-x-5" : ""}`} />
+                  </button>
+                  <span className={`w-6 text-left text-xs font-black ${autoTradeEnabled ? "text-[#5267ff]" : "text-slate-400"}`}>
+                    {autoTradeEnabled ? "ON" : "OFF"}
+                  </span>
+                </div>
+              </div>
               <p className="mt-2 text-sm leading-6 text-slate-500">
                 포트폴리오 종목을 기준으로 백엔드가 AI 서버에 START/ONCE 커맨드를 전달하고, 수신된 추론 결과와 전략 조건으로 주문을 판단합니다.
               </p>
             </div>
-            <div className="flex items-center gap-2 rounded-full bg-slate-100 px-4 py-2 text-xs font-black text-slate-500">
-              <span className={`h-2.5 w-2.5 rounded-full ${isRunning ? "bg-emerald-400" : "bg-slate-300"}`} />
-              {isRunning ? "실행 중" : "중지됨"}
-            </div>
           </div>
 
-          <div className="mt-5 flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={() => void runTradeAction("start")}
-              disabled={isLoadingTrade || !canRequestTrade}
-              className="inline-flex h-11 items-center gap-2 rounded-xl bg-[#5267ff] px-4 text-sm font-black text-white transition hover:bg-[#4054e8] disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              <FiPlay className="h-4 w-4" /> 자동매매 시작
-            </button>
-            <button
-              type="button"
-              onClick={() => void runTradeAction("once")}
-              disabled={isLoadingTrade || !canRequestTrade}
-              className="inline-flex h-11 items-center gap-2 rounded-xl border border-slate-200 px-4 text-sm font-black text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              <FiZap className="h-4 w-4" /> {isLoadingTrade ? "AI 분석 대기" : "1회 분석/실행"}
-            </button>
-            <button
-              type="button"
-              onClick={() => void runTradeAction("stop")}
-              disabled={isLoadingTrade}
-              className="inline-flex h-11 items-center gap-2 rounded-xl border border-rose-100 bg-rose-50 px-4 text-sm font-black text-rose-600 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              <FiSquare className="h-4 w-4" /> 중지
-            </button>
-            <button
-              type="button"
-              onClick={() => void refreshAll()}
-              disabled={isLoadingTrade || isLoadingPredictions}
-              className="inline-flex h-11 items-center gap-2 rounded-xl border border-slate-200 px-4 text-sm font-black text-slate-500 transition hover:bg-slate-50 disabled:opacity-50"
-            >
-              <FiRefreshCw className={`h-4 w-4 ${isLoadingPredictions ? "animate-spin" : ""}`} /> 새로고침
-            </button>
-          </div>
+          {autoTradeEnabled ? (
+            <>
+              <div className="mt-5 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => void runTradeAction("start")}
+                  disabled={isLoadingTrade || !canRequestTrade}
+                  className="inline-flex h-11 items-center gap-2 rounded-xl bg-[#5267ff] px-4 text-sm font-black text-white transition hover:bg-[#4054e8] disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <FiPlay className="h-4 w-4" /> 자동매매 시작
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void runTradeAction("once")}
+                  disabled={isLoadingTrade || !canRequestTrade}
+                  className="inline-flex h-11 items-center gap-2 rounded-xl border border-slate-200 px-4 text-sm font-black text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <FiZap className="h-4 w-4" /> {isLoadingTrade ? "AI 분석 대기" : "1회 분석/실행"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void runTradeAction("stop")}
+                  disabled={isLoadingTrade || !isRunning}
+                  className="inline-flex h-11 items-center gap-2 rounded-xl border border-rose-100 bg-rose-50 px-4 text-sm font-black text-rose-600 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <FiSquare className="h-4 w-4" /> 중지
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void refreshAll()}
+                  disabled={isLoadingTrade || isLoadingPredictions}
+                  className="inline-flex h-11 items-center gap-2 rounded-xl border border-slate-200 px-4 text-sm font-black text-slate-500 transition hover:bg-slate-50 disabled:opacity-50"
+                >
+                  <FiRefreshCw className={`h-4 w-4 ${isLoadingPredictions ? "animate-spin" : ""}`} /> 새로고침
+                </button>
+              </div>
 
-          {cartStocks.length === 0 ? (
-            <div className="mt-5 rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3 text-sm font-bold text-amber-700">
-              자동매매를 시작하려면 AI 리포트나 종목 랭킹에서 포트폴리오에 종목을 먼저 담아주세요.
-            </div>
-          ) : null}
-          {!marketStatus.isOpen ? (
-            <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-600">
-              현재 {marketStatus.label} 상태입니다. 자동매매 시작과 1회 분석/실행은 국내 정규장(09:00-15:30)에만 가능합니다.
-            </div>
-          ) : null}
-          {tradeMessage ? (
-            <div className="mt-5 rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm font-bold text-emerald-700">
-              {tradeMessage}
-            </div>
-          ) : null}
-          {tradeError ? (
-            <div className="mt-5 rounded-2xl border border-rose-100 bg-rose-50 px-4 py-3 text-sm font-bold text-rose-600">
-              {tradeError}
-            </div>
-          ) : null}
-
-          <div className="mt-6 overflow-hidden rounded-xl border border-slate-100">
-            <div className="flex items-center justify-between gap-3 bg-slate-50 px-5 py-3 text-sm font-black text-slate-700">
-              <span className="inline-flex items-center gap-2">
-                <FiCpu className="h-4 w-4 text-[#5267ff]" /> 최신 AI 판단
-              </span>
-              {isLoadingPredictions ? (
-                <span className="text-xs text-slate-400">조회 중</span>
+              {cartStocks.length === 0 ? (
+                <div className="mt-5 rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3 text-sm font-bold text-amber-700">
+                  자동매매를 시작하려면 AI 리포트나 종목 랭킹에서 포트폴리오에 종목을 먼저 담아주세요.
+                </div>
               ) : null}
-            </div>
-            {portfolioPredictions.length > 0 ? (
-              <div className="divide-y divide-slate-100">
-                {portfolioPredictions.map((prediction) => (
-                  <div key={prediction.ticker} className="grid gap-4 px-5 py-4 text-sm lg:grid-cols-[1.2fr_0.8fr_1.3fr] lg:items-center">
-                    <div>
-                      <p className="font-black text-slate-950">{prediction.name}</p>
-                      <p className="mt-0.5 text-xs font-bold text-slate-400">
-                        {prediction.ticker} · {prediction.hasResult ? formatDate(prediction.tradeDatetime) : prediction.error || "결과 대기중"}
-                      </p>
-                    </div>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className={`rounded-full border px-3 py-1 text-xs font-black ${signalClass(prediction.signal)}`}>
-                        {prediction.signal}
-                      </span>
-                      <span className="text-xs font-black text-slate-500">
-                        확신도 {prediction.hasResult ? `${prediction.confidence.toFixed(1)}%` : "-"}
-                      </span>
-                    </div>
-                    <div className="grid grid-cols-3 gap-2 text-xs font-black">
-                      <div className="rounded-lg bg-rose-50 px-3 py-2 text-rose-600">매수 {prediction.probBuy.toFixed(1)}%</div>
-                      <div className="rounded-lg bg-amber-50 px-3 py-2 text-amber-600">관망 {prediction.probHold.toFixed(1)}%</div>
-                      <div className="rounded-lg bg-blue-50 px-3 py-2 text-blue-600">매도 {prediction.probSell.toFixed(1)}%</div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="px-5 py-12 text-center text-sm font-bold text-slate-400">
-                포트폴리오 종목의 AI 판단 결과가 아직 없습니다.
-              </div>
-            )}
-          </div>
+              {!marketStatus.isOpen ? (
+                <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-600">
+                  현재 {marketStatus.label} 상태입니다. 자동매매 시작과 1회 분석/실행은 국내 정규장(09:00-15:30)에만 가능합니다.
+                </div>
+              ) : null}
+              {tradeMessage ? (
+                <div className="mt-5 rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm font-bold text-emerald-700">
+                  {tradeMessage}
+                </div>
+              ) : null}
+              {tradeError ? (
+                <div className="mt-5 rounded-2xl border border-rose-100 bg-rose-50 px-4 py-3 text-sm font-bold text-rose-600">
+                  {tradeError}
+                </div>
+              ) : null}
 
-          <div className="mt-6 overflow-hidden rounded-xl border border-slate-100">
-            <div className="flex items-center gap-2 bg-slate-50 px-5 py-3 text-sm font-black text-slate-700">
-              <FiActivity className="h-4 w-4 text-[#5267ff]" /> 최근 자동매매 주문 기록
-            </div>
-            {tradeLogs.length > 0 ? (
-              <div className="divide-y divide-slate-100">
-                {tradeLogs.slice(0, 8).map((log, index) => (
-                  <div key={`${log.created_at}-${log.ticker}-${index}`} className="grid gap-3 px-5 py-4 text-sm md:grid-cols-[1fr_auto_auto_auto] md:items-center">
-                    <div>
-                      <p className="font-black text-slate-950">{log.ticker}</p>
-                      <p className="mt-0.5 text-xs font-bold text-slate-400">{formatDate(log.created_at)} · {log.strategy_id}</p>
-                    </div>
-                    <p className={`font-black ${log.side === "BUY" ? "text-rose-500" : "text-blue-500"}`}>{log.side}</p>
-                    <p className="font-bold text-slate-600">{log.qty.toLocaleString("ko-KR")}주 · {formatWon(log.price)}</p>
-                    <p className="text-right text-xs font-bold text-slate-400">AI {log.ai_signal} {formatConfidence(log.ai_confidence)}</p>
+              <div className="mt-6 overflow-hidden rounded-xl border border-slate-100">
+                <div className="flex items-center justify-between gap-3 bg-slate-50 px-5 py-3 text-sm font-black text-slate-700">
+                  <span className="inline-flex items-center gap-2">
+                    <FiCpu className="h-4 w-4 text-[#5267ff]" /> 최신 AI 판단
+                  </span>
+                  {isLoadingPredictions ? (
+                    <span className="text-xs text-slate-400">조회 중</span>
+                  ) : null}
+                </div>
+                {portfolioPredictions.length > 0 ? (
+                  <div className="divide-y divide-slate-100">
+                    {portfolioPredictions.map((prediction) => (
+                      <div key={prediction.ticker} className="grid gap-4 px-5 py-4 text-sm lg:grid-cols-[1.2fr_0.8fr_1.3fr] lg:items-center">
+                            <div>
+                              <p className="font-black text-slate-950">{prediction.name}</p>
+                              <p className="mt-0.5 text-xs font-bold text-slate-400">
+                                {prediction.ticker} · {prediction.hasResult ? formatDate(prediction.tradeDatetime) : prediction.error || "결과 대기중"}
+                              </p>
+                            </div>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className={`rounded-full border px-3 py-1 text-xs font-black ${signalClass(prediction.signal)}`}>
+                                {prediction.signal}
+                              </span>
+                              <span className="text-xs font-black text-slate-500">
+                                확신도 {prediction.hasResult ? `${prediction.confidence.toFixed(1)}%` : "-"}
+                              </span>
+                            </div>
+                            <div className="grid grid-cols-3 gap-2 text-xs font-black">
+                              <div className="rounded-lg bg-rose-50 px-3 py-2 text-rose-600">매수 {prediction.probBuy.toFixed(1)}%</div>
+                              <div className="rounded-lg bg-amber-50 px-3 py-2 text-amber-600">관망 {prediction.probHold.toFixed(1)}%</div>
+                              <div className="rounded-lg bg-blue-50 px-3 py-2 text-blue-600">매도 {prediction.probSell.toFixed(1)}%</div>
+                            </div>
+                      </div>
+                    ))}
                   </div>
-                ))}
+                ) : (
+                  <div className="px-5 py-12 text-center text-sm font-bold text-slate-400">
+                    포트폴리오 종목의 AI 판단 결과가 아직 없습니다.
+                  </div>
+                )}
               </div>
-            ) : (
-              <div className="px-5 py-12 text-center text-sm font-bold text-slate-400">
-                아직 백엔드에 저장된 주문 기록이 없습니다. AI 판단은 위 최신 AI 판단 카드에 표시되고, 전략 조건과 주문 조건이 맞아 실제 주문을 시도할 때 이 영역에 기록됩니다.
+
+              <div className="mt-6 overflow-hidden rounded-xl border border-slate-100">
+                <div className="flex items-center gap-2 bg-slate-50 px-5 py-3 text-sm font-black text-slate-700">
+                  <FiActivity className="h-4 w-4 text-[#5267ff]" /> 최근 자동매매 주문 기록
+                </div>
+                {tradeLogs.length > 0 ? (
+                  <div className="divide-y divide-slate-100">
+                    {tradeLogs.slice(0, 8).map((log, index) => (
+                      <div key={`${log.created_at}-${log.ticker}-${index}`} className="grid gap-3 px-5 py-4 text-sm md:grid-cols-[1fr_auto_auto_auto] md:items-center">
+                            <div>
+                              <p className="font-black text-slate-950">{log.ticker}</p>
+                              <p className="mt-0.5 text-xs font-bold text-slate-400">{formatDate(log.created_at)} · {log.strategy_id}</p>
+                            </div>
+                            <p className={`font-black ${log.side === "BUY" ? "text-rose-500" : "text-blue-500"}`}>{log.side}</p>
+                            <p className="font-bold text-slate-600">{log.qty.toLocaleString("ko-KR")}주 · {formatWon(log.price)}</p>
+                            <p className="text-right text-xs font-bold text-slate-400">AI {log.ai_signal} {formatConfidence(log.ai_confidence)}</p>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="px-5 py-12 text-center text-sm font-bold text-slate-400">
+                    아직 백엔드에 저장된 주문 기록이 없습니다. AI 판단은 위 최신 AI 판단 카드에 표시되고, 전략 조건과 주문 조건이 맞아 실제 주문을 시도할 때 이 영역에 기록됩니다.
+                  </div>
+                )}
               </div>
-            )}
-          </div>
+            </>
+          ) : null}
         </div>
       </section>
 
