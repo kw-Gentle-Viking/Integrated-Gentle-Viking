@@ -1,3 +1,5 @@
+import { apiFetch } from "@/lib/signup/auth";
+
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
 export type OrderSide = "buy" | "sell";
@@ -42,7 +44,7 @@ interface KisOrderResponse {
  *          ORD_UNPR    주문단가 (시장가는 "0")
  */
 export async function placeOrder(req: OrderRequest): Promise<OrderResult> {
-  const res = await fetch(`${API_BASE}/trade/order`, {
+  const res = await apiFetch(`${API_BASE}/trade/order`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({

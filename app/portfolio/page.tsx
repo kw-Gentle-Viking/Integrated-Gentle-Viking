@@ -25,6 +25,18 @@ type TradeLog = {
   created_at: string;
 };
 
+type AutoTradeDecision = {
+  ticker: string;
+  action: string;
+  reason: string;
+  detail: string;
+  ai_signal: string;
+  ai_confidence: number;
+  strategy_id: string;
+  price: number;
+  created_at: string;
+};
+
 type BackendPrediction = {
   ticker?: string;
   signal?: string;
@@ -130,6 +142,33 @@ function signalClass(signal: string) {
   return "bg-slate-50 text-slate-500 border-slate-100";
 }
 
+function decisionActionClass(action: string) {
+  if (action === "ORDER_SUBMITTED") return "bg-emerald-50 text-emerald-700 border-emerald-100";
+  if (action === "SKIP") return "bg-rose-50 text-rose-600 border-rose-100";
+  return "bg-amber-50 text-amber-700 border-amber-100";
+}
+
+function decisionActionLabel(action: string) {
+  if (action === "ORDER_SUBMITTED") return "주문 시도";
+  if (action === "SKIP") return "스킵";
+  return "보류";
+}
+
+function decisionReasonLabel(reason: string) {
+  const labels: Record<string, string> = {
+    LOW_CONFIDENCE: "확신도 부족",
+    STRATEGY_CONDITION_NOT_MET: "전략 조건 미충족",
+    AI_STRATEGY_MISMATCH: "AI·전략 불일치",
+    NO_MARKET_PRICE: "시세 없음",
+    NO_POSITION_TO_SELL: "매도 보유수량 없음",
+    NO_BUY_ALLOCATION: "매수 배분 없음",
+    ZERO_ORDER_QUANTITY: "주문 수량 0",
+    FILLED: "주문 체결",
+    FAILED: "주문 실패",
+  };
+  return labels[reason] ?? reason;
+}
+
 function delay(ms: number) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
@@ -138,6 +177,7 @@ export default function PortfolioPage() {
   const { cartStocks } = useStockList();
   const [tradeStatus, setTradeStatus] = useState<TradeStatus | null>(null);
   const [tradeLogs, setTradeLogs] = useState<TradeLog[]>([]);
+  const [tradeDecisions, setTradeDecisions] = useState<AutoTradeDecision[]>([]);
   const [portfolioPredictions, setPortfolioPredictions] = useState<PortfolioPrediction[]>([]);
   const [isLoadingTrade, setIsLoadingTrade] = useState(false);
   const [isLoadingPredictions, setIsLoadingPredictions] = useState(false);
@@ -220,9 +260,10 @@ export default function PortfolioPage() {
 
   const loadTradeState = useCallback(async () => {
     try {
-      const [statusRes, historyRes] = await Promise.all([
+      const [statusRes, historyRes, decisionsRes] = await Promise.all([
         apiFetch(`${API_BASE}/trade/status`),
         apiFetch(`${API_BASE}/trade/history`),
+        apiFetch(`${API_BASE}/trade/decisions`),
       ]);
 
       if (statusRes.ok) {
@@ -236,6 +277,10 @@ export default function PortfolioPage() {
       if (historyRes.ok) {
         setTradeLogs((await historyRes.json()) as TradeLog[]);
       }
+
+      if (decisionsRes.ok) {
+        setTradeDecisions((await decisionsRes.json()) as AutoTradeDecision[]);
+      }
     } catch (error) {
       console.error(error);
       setTradeError("자동매매 상태를 불러오지 못했습니다.");
@@ -245,6 +290,16 @@ export default function PortfolioPage() {
   useEffect(() => {
     void loadTradeState();
   }, [loadTradeState]);
+
+  useEffect(() => {
+    if (!autoTradeEnabled && tradeStatus?.status !== "RUNNING") return;
+
+    const timer = window.setInterval(() => {
+      void loadTradeState();
+    }, 15_000);
+
+    return () => window.clearInterval(timer);
+  }, [autoTradeEnabled, tradeStatus?.status, loadTradeState]);
 
   useEffect(() => {
     void loadPortfolioPredictions();
@@ -287,6 +342,10 @@ export default function PortfolioPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           total_capital: totalValue > 0 ? totalValue : undefined,
+          basket: cartStocks.map((stock) => ({
+            ticker: stock.code,
+            ticker_name: stock.name,
+          })),
           ticker_strategies: cartStocks.map((stock) => ({
             ticker: stock.code,
             strategy_id: "rsi_reversal",
@@ -493,6 +552,37 @@ export default function PortfolioPage() {
                 ) : (
                   <div className="px-5 py-12 text-center text-sm font-bold text-slate-400">
                     포트폴리오 종목의 AI 판단 결과가 아직 없습니다.
+                  </div>
+                )}
+              </div>
+
+              <div className="mt-6 overflow-hidden rounded-xl border border-slate-100">
+                <div className="flex items-center gap-2 bg-slate-50 px-5 py-3 text-sm font-black text-slate-700">
+                  <FiCpu className="h-4 w-4 text-[#5267ff]" /> 최근 자동매매 판단 기록
+                </div>
+                {tradeDecisions.length > 0 ? (
+                  <div className="divide-y divide-slate-100">
+                    {tradeDecisions.slice(0, 10).map((decision, index) => (
+                      <div key={`${decision.created_at}-${decision.ticker}-${index}`} className="grid gap-3 px-5 py-4 text-sm md:grid-cols-[1fr_auto_auto] md:items-center">
+                        <div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <p className="font-black text-slate-950">{decision.ticker}</p>
+                            <span className={`rounded-full border px-2.5 py-1 text-xs font-black ${decisionActionClass(decision.action)}`}>
+                              {decisionActionLabel(decision.action)}
+                            </span>
+                          </div>
+                          <p className="mt-1 text-xs font-bold text-slate-400">{formatDate(decision.created_at)} · {decision.strategy_id || "-"}</p>
+                          <p className="mt-1 text-xs font-bold text-slate-600">{decisionReasonLabel(decision.reason)}</p>
+                          {decision.detail ? <p className="mt-1 text-xs leading-5 text-slate-500">{decision.detail}</p> : null}
+                        </div>
+                        <p className="font-bold text-slate-600">{formatWon(decision.price)}</p>
+                        <p className="text-right text-xs font-bold text-slate-400">AI {decision.ai_signal || "-"} {formatConfidence(decision.ai_confidence)}</p>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="px-5 py-10 text-center text-sm font-bold text-slate-400">
+                    아직 자동매매 판단 기록이 없습니다. 다음 AI 실시간 판단 이후 HOLD/SKIP 사유가 여기에 표시됩니다.
                   </div>
                 )}
               </div>
