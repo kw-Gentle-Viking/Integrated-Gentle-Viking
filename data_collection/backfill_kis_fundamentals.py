@@ -159,9 +159,10 @@ def backfill_market_indices(client: KisClient, dsn: str,
         while cursor_end_idx >= start:
             cursor_start = max(start, cursor_end_idx - timedelta(days=140))
             raw = client.request(
-                path="/uapi/domestic-stock/v1/quotations/inquire-daily-index",
-                tr_id="FHKST01010000",
+                path="/uapi/domestic-stock/v1/quotations/inquire-daily-indexchartprice",
+                tr_id="FHKUP03500100",
                 params={
+                    "FID_COND_MRKT_DIV_CODE": "U",
                     "FID_INPUT_ISCD": index_code,
                     "FID_INPUT_DATE_1": cursor_start.strftime("%Y%m%d"),
                     "FID_INPUT_DATE_2": cursor_end_idx.strftime("%Y%m%d"),
@@ -170,12 +171,15 @@ def backfill_market_indices(client: KisClient, dsn: str,
             )
             time.sleep(KIS_API_INTERVAL)
 
-            # Parse index data
+            # Parse index data (live-verified 2026-09-08: correct path/tr_id is
+            # inquire-daily-indexchartprice/FHKUP03500100, FID_COND_MRKT_DIV_CODE="U";
+            # the originally-written inquire-daily-index/FHKST01010000 was a 404 —
+            # wrong endpoint entirely)
             rows = raw.get("output2", [])
             for r in rows:
                 d = r["stck_bsop_date"]
                 trade_date = f"{d[:4]}-{d[4:6]}-{d[6:]}"
-                close_price = float(r["stck_clpr"])
+                close_price = float(r["bstp_nmix_prpr"])
                 upsert_market_index_daily(dsn, index_code, trade_date, close_price)
 
             cursor_end_idx = cursor_start - timedelta(days=1)
