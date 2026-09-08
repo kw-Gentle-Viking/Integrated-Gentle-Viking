@@ -1,4 +1,4 @@
-tft-torch/
+tft-torch
 __pycache__/
 *.pyc
 .env
