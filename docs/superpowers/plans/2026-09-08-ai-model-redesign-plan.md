@@ -24,6 +24,7 @@
 - encoder 길이 60거래일 고정
 - 신규 인프라(TorchServe, BentoML 등) 도입 금지 — 기존 `api_server.py`/crontab 패턴 재사용
 - 금액/거래대금 관련 새 API 응답 필드는 대량 백필 전에 반드시 1건 샘플로 단위(원 vs 백만원 등)를 수동 확인한다 — 기존 KIS 필드(`hts_avls`, `*_tr_pbmn` 등)는 이미 pipeline_overview.md에 배율이 문서화돼 있지만, 처음 다루는 API(레버리지 ETF/ETN NAV·AUM 등)는 확인된 바 없음
+- **모든 확인된(또는 확인이 필요한) 단위는 `docs/data_units.md`에 기록한다** — 테이블.컬럼, 소스 API 필드, 원본 단위, 배율, 확인 근거를 표에 남길 것. 새 금액/수량 필드를 다루는 태스크는 이 문서를 갱신하고 커밋에 포함시킨다
 - **모든 원화 금액 필드는 raw 원(₩) 단위로 통일한다** (백만원/천원 단위로 오는 API는 반드시 명시적으로 환산 — 기존 프로젝트에서도 이 원칙을 지켰음). 가장 확실한 방법은 API 제공처 문서·샘플 응답에서 그 필드가 정확히 어떤 단위로 오는지 먼저 확인하는 것(위 항목의 단위 검증과 동일 원칙). 단, WTI 유가·금값·S&P500 등 외화/지수 표시 매크로 지표는 원화 환산 대상이 아니다 — 수익률/변동폭으로만 피처화하므로 원래 통화·단위 그대로 사용
 - 데이터 정합성은 클리핑(이상치 처리, Task 11)과 별개 문제 — 독립 소스 간 교차검증(예: 두 가지 방식으로 계산한 시가총액 비교), 값 범위, 결측률, 종목별 거래일수 갭 검증을 Task 10에서 수행하고 통과해야 다음 단계로 진행
 
@@ -665,10 +666,14 @@ Expected: PASS (3 tests)
 Run: `nohup /home/user/miniconda3/envs/kis_collector/bin/python data_collection/run_daily_price_backfill.py >> backfill_daily_price.log 2>&1 &` (저녁~새벽 시간대)
 Expected: `SELECT ticker, count(*) FROM price_daily GROUP BY ticker`로 200종목 전부 약 1700+ 행(2019-01-02~현재 영업일수) 확인
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 6: `turnover` 단위 확인 후 `docs/data_units.md` 갱신**
+
+`docs/data_units.md`의 "미확인" 표에 `price_daily.turnover`가 없다면(이미 "raw 원으로 추정"으로 기재돼 있음), 백필된 실제 값으로 검증한다: 임의 종목·날짜 하나를 골라 `turnover`가 대략 `close_price × volume`(같은 자릿수)과 맞아떨어지는지 확인. 맞으면 "확인된 단위" 표로 이동하고 확인 근거(실제 검증한 종목/날짜)를 적는다. 자릿수가 안 맞으면 배율을 역산해서 `parse_daily_price_response()`(Step 3)를 수정하고 4-5단계를 재실행한다.
+
+- [ ] **Step 7: Commit**
 
 ```bash
-git add data_collection/backfill_daily_price.py data_collection/test_backfill_daily_price.py data_collection/run_daily_price_backfill.py
+git add data_collection/backfill_daily_price.py data_collection/test_backfill_daily_price.py data_collection/run_daily_price_backfill.py docs/data_units.md
 git commit -m "feat: backfill daily OHLCV for top-200 universe (2019-01-02~present)"
 ```
 
@@ -806,10 +811,14 @@ Expected: PASS (3 tests)
 
 Expected: `daily_valuation`, `investor_flow_daily`, `market_index_daily`(KOSPI `0001`/KOSDAQ `1001`) 테이블에 각 종목·거래일별 데이터 적재 확인
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 6: `docs/data_units.md` 확인**
+
+이 태스크가 다루는 `hts_avls`(×1,000,000), `prsn/frgn/orgn_ntby_tr_pbmn`(×1,000,000) 배율은 이미 `docs/data_units.md`의 "확인된 단위" 표에 기재돼 있음(원본 캡스톤 문서 기반) — 백필된 실제 값이 그 문서와 자릿수가 맞는지만 샘플 1건으로 대조 확인하고, 문제 없으면 그대로 둔다. 어긋나면 표를 갱신하고 파싱 함수를 수정한다.
+
+- [ ] **Step 7: Commit**
 
 ```bash
-git add data_collection/backfill_kis_fundamentals.py data_collection/test_backfill_kis_fundamentals.py
+git add data_collection/backfill_kis_fundamentals.py data_collection/test_backfill_kis_fundamentals.py docs/data_units.md
 git commit -m "feat: backfill valuation, investor flow, and index data"
 ```
 
@@ -1360,7 +1369,7 @@ print(raw)
 3. `aum`이 `nav × 상장좌수` 근사치와 맞아떨어지는지 — 상장좌수는 종목마스터파일이나 별도 조회로 확인
 4. 위 3개 중 하나라도 예상과 다른 자릿수면, 실제 KIS 응답 필드 원본을 그대로 보고 올바른 배율을 역산해서 `parse_leverage_daily_response()`(Step 7에서 구현)에 반영
 
-이 확인 결과(사용한 정확한 배율과 그 근거)를 리포트에 남길 것.
+이 확인 결과(사용한 정확한 배율과 그 근거)를 `docs/data_units.md`의 "미확인" 표에서 `leverage_daily.close_price`/`aum`/`nav` 세 줄을 "확인된 단위" 표로 옮기는 형태로 기록할 것(리포트에도 남길 것).
 
 - [ ] **Step 7: 확인된 단위로 파싱 함수 구현 + 실행**
 
@@ -1371,7 +1380,7 @@ Expected: `leverage_products` 18행, `leverage_daily` 18종×영업일수, `vi_e
 - [ ] **Step 8: Commit**
 
 ```bash
-git add data_collection/leverage_products.py data_collection/backfill_leverage.py data_collection/test_leverage_products.py data_collection/test_backfill_leverage.py
+git add data_collection/leverage_products.py data_collection/backfill_leverage.py data_collection/test_leverage_products.py data_collection/test_backfill_leverage.py docs/data_units.md
 git commit -m "feat: backfill leverage ETF/ETN and VI event data"
 ```
 
