@@ -16,7 +16,8 @@
 | `investor_flow_daily.individual_net_amt` | KIS `prsn_ntby_tr_pbmn` (FHKST01010900) | 백만원 | × 1,000,000 | 위와 동일 |
 | `investor_flow_daily.foreign_net_amt` | KIS `frgn_ntby_tr_pbmn` (FHKST01010900) | 백만원 | × 1,000,000 | 위와 동일 |
 | `investor_flow_daily.inst_net_amt` | KIS `orgn_ntby_tr_pbmn` (FHKST01010900) | 백만원 | × 1,000,000 | 위와 동일 |
-| `price_daily.turnover` | KIS `acml_tr_pbmn` (FHKST03010100) | raw 원으로 추정 | × 1 | 원본 문서에 배율 언급 없음 — **확정 아님**, Task 4 실행 시 실제 응답값을 종가×거래량과 대조해서 자릿수 재확인 권장 |
+| `price_daily.turnover` | KIS `acml_tr_pbmn` (FHKST03010100) | raw 원 | × 1 | 2026-09-08 실제 백필(200종목, 376,682행) 데이터로 검증 — 005930 최근 3거래일 `turnover`/`(close_price×volume)` 비율이 0.99~1.02 (VWAP 기반이라 완전히 1은 아니지만 자릿수 일치 확인됨) |
+| `price_daily.shares_outstanding` | KIS `lstn_stcn` — **`output2`가 아니라 `output1`**(현재가, 같은 응답에 포함) | 주 | × 1 | 2026-09-08 라이브 실행 중 발견: `output2`(일별 시세)엔 이 필드가 없어서 전량 NULL이 되는 버그가 있었음(수정 완료, 커밋 af1057a). `output1`은 "조회 시점 현재" 기준이라 과거 시점 근사치(원본 캡스톤과 동일한 한계) |
 | `ticker_universe.market_cap`, `price_daily` 기반 계산 시총 | 없음 (직접 계산) | raw 원 | × 1 | `close_price(원) × shares_outstanding(주)` 직접 곱셈이라 API 배율 이슈 자체가 없음 |
 | `market_global.*` (snp500, gold, wti 등) | yfinance/FRED | 각 지표 원래 통화·단위(USD, index point 등) | 환산 안 함 | Global Constraint — 원화 환산 대상 아님 |
 
