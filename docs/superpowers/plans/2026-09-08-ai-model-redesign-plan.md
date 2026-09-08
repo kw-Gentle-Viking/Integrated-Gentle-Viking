@@ -139,6 +139,12 @@ CREATE TABLE IF NOT EXISTS intraday_1min (
     open NUMERIC, high NUMERIC, low NUMERIC, close NUMERIC, volume BIGINT,
     PRIMARY KEY (ticker, datetime)
 );
+
+CREATE TABLE IF NOT EXISTS labels (
+    ticker VARCHAR(6) NOT NULL, trade_date DATE NOT NULL,
+    next_day_return NUMERIC, label SMALLINT,  -- 0=매수, 1=관망, 2=매도, NULL=마지막 거래일(라벨 없음)
+    PRIMARY KEY (ticker, trade_date)
+);
 ```
 
 - [ ] **Step 2: DB 생성/스키마 적용 스크립트 작성**
@@ -195,7 +201,7 @@ def test_schema_defines_all_required_tables():
         "ticker_universe", "price_daily", "daily_valuation", "investor_flow_daily",
         "market_index_daily", "market_global", "sector_daily_ohlcv", "stock_events",
         "calendar", "market_events", "leverage_products", "leverage_daily",
-        "vi_events", "intraday_5min", "intraday_1min",
+        "vi_events", "intraday_5min", "intraday_1min", "labels",
     ]
     found = set(re.findall(r"CREATE TABLE IF NOT EXISTS (\w+)", ddl))
     missing = [t for t in required_tables if t not in found]
@@ -1352,7 +1358,7 @@ git commit -m "feat: backfill leverage ETF/ETN and VI event data"
 - Test: `training/test_label.py`
 
 **Interfaces:**
-- Produces: `compute_next_day_return(close_prices: list[float]) -> list[Optional[float]]` (마지막 행은 None), `derive_threshold(returns: list[float], target_hold_ratio: float = 0.5) -> float`, `assign_label(returns: list[float], threshold: float) -> list[Optional[int]]` (0=매수, 1=관망, 2=매도)
+- Produces: `compute_next_day_return(close_prices: list[float]) -> list[Optional[float]]` (마지막 행은 None), `derive_threshold(returns: list[float], target_hold_ratio: float = 0.5) -> float`, `assign_label(returns: list[float], threshold: float) -> list[Optional[int]]` (0=매수, 1=관망, 2=매도), `build_label_rows(ticker: str, trade_dates: list[str], close_prices: list[float], threshold: float) -> list[dict]`, `upsert_labels(dsn: str, rows: list[dict]) -> None` (Task 1의 `labels` 테이블에 저장 — Task 10이 이 테이블을 `feature_pool`에 조인해서 최종 `label` 컬럼을 만든다)
 
 - [ ] **Step 1: 실패하는 테스트 작성**
 
@@ -1435,23 +1441,91 @@ def assign_label(returns: list[Optional[float]], threshold: float) -> list[Optio
 Run: `/home/user/miniconda3/envs/kis_collector/bin/python -m pytest training/test_label.py -v`
 Expected: PASS (3 tests)
 
-- [ ] **Step 5: 실제 threshold 계산 (1단계 train split, 2019-2023, 시총200 전체)**
+- [ ] **Step 5: 실패하는 테스트 작성 (labels 테이블 upsert)**
+
+`training/test_label.py`에 추가:
+
+```python
+from training.label import build_label_rows
+
+
+def test_build_label_rows_pairs_ticker_dates_with_labels():
+    dates = ["2019-01-02", "2019-01-03", "2019-01-04"]
+    closes = [100.0, 110.0, 99.0]
+    rows = build_label_rows(ticker="005930", trade_dates=dates, close_prices=closes, threshold=0.015)
+    assert rows[0] == {"ticker": "005930", "trade_date": "2019-01-02",
+                         "next_day_return": pytest.approx(0.10), "label": 0}
+    assert rows[2] == {"ticker": "005930", "trade_date": "2019-01-04",
+                         "next_day_return": None, "label": None}
+```
+
+(파일 상단에 `import pytest` 추가 필요)
+
+- [ ] **Step 6: 테스트 실패 확인**
+
+Run: `/home/user/miniconda3/envs/kis_collector/bin/python -m pytest training/test_label.py -v`
+Expected: FAIL (`build_label_rows` 미정의)
+
+- [ ] **Step 7: 구현**
+
+`training/label.py`에 추가:
+
+```python
+import psycopg2
+
+
+def build_label_rows(ticker: str, trade_dates: list[str], close_prices: list[float],
+                      threshold: float) -> list[dict]:
+    returns = compute_next_day_return(close_prices)
+    labels = assign_label(returns, threshold)
+    return [
+        {"ticker": ticker, "trade_date": d, "next_day_return": r, "label": l}
+        for d, r, l in zip(trade_dates, returns, labels)
+    ]
+
+
+def upsert_labels(dsn: str, rows: list[dict]) -> None:
+    if not rows:
+        return
+    conn = psycopg2.connect(dsn)
+    with conn.cursor() as cur:
+        for r in rows:
+            cur.execute(
+                """INSERT INTO labels (ticker, trade_date, next_day_return, label)
+                   VALUES (%(ticker)s, %(trade_date)s, %(next_day_return)s, %(label)s)
+                   ON CONFLICT (ticker, trade_date) DO UPDATE SET
+                     next_day_return = EXCLUDED.next_day_return, label = EXCLUDED.label""",
+                r,
+            )
+    conn.commit()
+    conn.close()
+```
+
+- [ ] **Step 8: 테스트 통과 확인**
+
+Run: `/home/user/miniconda3/envs/kis_collector/bin/python -m pytest training/test_label.py -v`
+Expected: PASS (5 tests)
+
+- [ ] **Step 9: 실제 threshold 계산 + 전체 기간 라벨 저장**
 
 ```python
 # training/run_derive_threshold.py:
-# 1단계 train 구간(2019-01-02~2023-12-31)의 시총200 전체 price_daily.close_price로
-# compute_next_day_return → derive_threshold(target_hold_ratio=0.5) 실행 후 결과를
-# training/threshold.json 에 저장 ({"threshold": <값>, "computed_on": "1단계 train, 2019-2023"})
+# 1) 1단계 train 구간(2019-01-02~2023-12-31)의 시총200 전체 price_daily.close_price로
+#    compute_next_day_return → derive_threshold(target_hold_ratio=0.5) 실행 후 결과를
+#    training/threshold.json 에 저장 ({"threshold": <값>, "computed_on": "1단계 train, 2019-2023"})
+# 2) 이 threshold로, 시총200 전체 종목의 전체 기간(2019-01-02~현재, 1단계/2단계 공용)에 대해
+#    종목별 build_label_rows(ticker, trade_dates, close_prices, threshold) 호출 후
+#    upsert_labels(dsn, rows)로 `labels` 테이블에 저장 — Task 10의 feature_pool 조인이 이 테이블을 사용한다
 ```
 
 Run: `/home/user/miniconda3/envs/kis_collector/bin/python training/run_derive_threshold.py`
-Expected: `training/threshold.json` 생성, 관망 비율이 45~55% 사이인지 확인
+Expected: `training/threshold.json` 생성(관망 비율 45~55% 확인), `labels` 테이블에 200종목 × 전체 기간 적재(`SELECT count(*) FROM labels WHERE label IS NOT NULL`로 확인)
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 10: Commit**
 
 ```bash
 git add training/label.py training/test_label.py training/run_derive_threshold.py
-git commit -m "feat: add next-day return labeling with data-derived threshold"
+git commit -m "feat: add next-day return labeling with data-derived threshold, persist to labels table"
 ```
 
 ---
@@ -1464,9 +1538,9 @@ git commit -m "feat: add next-day return labeling with data-derived threshold"
 - Test: `features/test_leverage_features.py`
 
 **Interfaces:**
-- Consumes: `LEVERAGE_PRODUCTS` (Task 8)
+- Consumes: `LEVERAGE_PRODUCTS` (Task 8), `labels` table populated by Task 9's `upsert_labels` (반드시 Task 9가 먼저 완료돼 있어야 함)
 - Produces: `compute_rebalancing_flow(prev_aum: float, underlying_return: float, multiple: float) -> float`, `aggregate_leverage_signals(product_rows: list[dict], underlying_return: float, underlying_market_cap: float) -> dict` (returns `lev_total_volume`, `lev_total_aum`, `lev_aum_to_mktcap`, `est_rebalancing_flow`)
-- Produces: `build_feature_pool(dsn: str, start_date: str, end_date: str) -> None` (조인 → `feature_pool` 테이블 생성/적재)
+- Produces: `build_feature_pool(dsn: str, start_date: str, end_date: str) -> None` (조인 → `feature_pool` 테이블 생성/적재, `label`/`next_day_return` 컬럼 포함)
 
 - [ ] **Step 1: 실패하는 테스트 작성 (계산 로직 — 설계 §6.3 공식)**
 
@@ -1550,7 +1624,7 @@ Expected: PASS (4 tests)
 
 - [ ] **Step 5: `feature_pool` 조인 빌드 구현 및 실행**
 
-`features/build_features.py` — `price_daily`(기술적 지표: log_ret, disparity_5/20/60d, rsi_14 등은 pandas로 계산), `daily_valuation`, `investor_flow_daily`, `market_global`, `market_index_daily`, `sector_daily_ohlcv`, `stock_events`, `calendar`, `market_events`를 ticker+trade_date로 조인하고, `leverage_daily`+`leverage_products`를 `aggregate_leverage_signals`로 집계해 붙이고(2026-05-27 이전은 빈 리스트 → 자동 0), `vi_events`에서 `is_vi_triggered`/`vi_count_recent5d`를 계산해 붙여서 `feature_pool` 테이블에 적재하는 스크립트. 여기엔 §7 원칙대로 만들 수 있는 피처를 전부 포함시킨다(추후 ablation에서 subset 선택).
+`features/build_features.py` — `price_daily`(기술적 지표: log_ret, disparity_5/20/60d, rsi_14 등은 pandas로 계산), `daily_valuation`, `investor_flow_daily`, `market_global`, `market_index_daily`, `sector_daily_ohlcv`, `stock_events`, `calendar`, `market_events`를 ticker+trade_date로 조인하고, `leverage_daily`+`leverage_products`를 `aggregate_leverage_signals`로 집계해 붙이고(2026-05-27 이전은 빈 리스트 → 자동 0), `vi_events`에서 `is_vi_triggered`/`vi_count_recent5d`를 계산해 붙이고, **`labels` 테이블(Task 9)을 (ticker, trade_date)로 조인해서 `label`/`next_day_return` 컬럼을 최종 결과에 포함**시켜 `feature_pool` 테이블에 적재하는 스크립트(Task 9가 먼저 완료되어 `labels`가 채워져 있어야 이 조인이 의미 있음 — Task 9 → Task 10 순서 의존성). 여기엔 §7 원칙대로 만들 수 있는 피처를 전부 포함시킨다(추후 ablation에서 subset 선택).
 
 Run: `/home/user/miniconda3/envs/kis_collector/bin/python features/build_features.py --start 2019-01-02 --end <today>`
 Expected: `feature_pool` 테이블에 200종목 × 전체 기간 행 적재, 컬럼 수가 기존 55개 + 레버리지 6개 이상
