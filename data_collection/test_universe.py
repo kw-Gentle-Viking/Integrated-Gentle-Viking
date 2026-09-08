@@ -1,4 +1,39 @@
-from data_collection.universe import compute_top_n_snapshot
+import csv
+import tempfile
+from pathlib import Path
+
+from data_collection.universe import compute_top_n_snapshot, fetch_snapshot_prices, load_candidate_tickers
+
+
+class _FakeClientOneTickerFails:
+    def request(self, path, tr_id, params):
+        if params["FID_INPUT_ISCD"] == "BAD":
+            raise Exception("500 Server Error")
+        return {"output2": [{"stck_clpr": "1000", "lstn_stcn": "10"}]}
+
+
+def test_fetch_snapshot_prices_skips_ticker_whose_request_errors():
+    result = fetch_snapshot_prices(_FakeClientOneTickerFails(), ["005930", "BAD", "000660"], "20190102")
+    assert [r["ticker"] for r in result] == ["005930", "000660"]
+
+
+def test_load_candidate_tickers_skips_non_numeric_codes():
+    with tempfile.TemporaryDirectory() as tmp:
+        kospi_path = Path(tmp) / "kospi.csv"
+        kosdaq_path = Path(tmp) / "kosdaq.csv"
+        with open(kospi_path, "w", encoding="utf-8-sig", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["ticker", "ticker_name"])
+            writer.writerow(["005930", "삼성전자"])
+            writer.writerow(["005935", "삼성전자우"])  # 우선주지만 숫자만이라 통과되는 케이스는 허용
+        with open(kosdaq_path, "w", encoding="utf-8-sig", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["ticker", "ticker_name"])
+            writer.writerow(["A123Z0", "특수종목"])  # 영문 포함 -> 제외돼야 함
+            writer.writerow(["035760", "CJ ENM"])
+
+        result = load_candidate_tickers(str(kospi_path), str(kosdaq_path))
+        assert [c["ticker"] for c in result] == ["005930", "005935", "035760"]
 
 
 def test_ranks_by_market_cap_descending():

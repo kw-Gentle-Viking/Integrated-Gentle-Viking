@@ -1,8 +1,11 @@
 import csv
+import re
 from pathlib import Path
 from typing import Optional
 import psycopg2
 from data_collection.kis_client import KisClient
+
+_NUMERIC_TICKER = re.compile(r"^\d{6}$")
 
 
 def load_candidate_tickers(kospi_csv: str, kosdaq_csv: str) -> list[dict]:
@@ -10,20 +13,31 @@ def load_candidate_tickers(kospi_csv: str, kosdaq_csv: str) -> list[dict]:
     for path, is_kospi in [(kospi_csv, True), (kosdaq_csv, False)]:
         with open(path, encoding="utf-8-sig") as f:
             for row in csv.DictReader(f):
-                candidates.append({"ticker": row["ticker"].zfill(6), "is_kospi": is_kospi})
+                ticker = row["ticker"].zfill(6)
+                if not _NUMERIC_TICKER.match(ticker):
+                    # 우선주/기타 특수종목 등 영문자가 섞인 코드는 일반주 학습 유니버스에서 제외
+                    continue
+                candidates.append({"ticker": ticker, "is_kospi": is_kospi})
     return candidates
 
 
 def fetch_snapshot_prices(client: KisClient, tickers: list[str], snapshot_date: str) -> list[dict]:
     results = []
     for ticker in tickers:
-        data = client.request(
-            path="/uapi/domestic-stock/v1/quotations/inquire-daily-price",
-            tr_id="FHKST03010100",
-            params={"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": ticker,
-                    "FID_INPUT_DATE_1": snapshot_date, "FID_INPUT_DATE_2": snapshot_date,
-                    "FID_PERIOD_DIV_CODE": "D", "FID_ORG_ADJ_PRC": "1"},
-        )
+        try:
+            data = client.request(
+                path="/uapi/domestic-stock/v1/quotations/inquire-daily-price",
+                tr_id="FHKST03010100",
+                params={"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": ticker,
+                        "FID_INPUT_DATE_1": snapshot_date, "FID_INPUT_DATE_2": snapshot_date,
+                        "FID_PERIOD_DIV_CODE": "D", "FID_ORG_ADJ_PRC": "1"},
+            )
+        except Exception as exc:
+            # A single ticker failing (delisted, not yet listed on snapshot_date, transient
+            # API error) must not abort the whole snapshot — compute_top_n_snapshot already
+            # excludes candidates missing price/shares, so skipping here is safe.
+            print(f"  [skip] {ticker}: {exc}")
+            continue
         rows = data.get("output2", [])
         if not rows:
             continue
