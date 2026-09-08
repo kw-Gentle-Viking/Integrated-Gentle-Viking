@@ -1,0 +1,21 @@
+LEVERAGE_PRODUCTS = [
+    {"code": "0193W0", "product_name": "KODEX 삼성전자단일종목레버리지", "underlying_ticker": "005930", "multiple": 2.0, "product_type": "ETF", "issuer": "Samsung Asset", "listed_date": "2026-05-27"},
+    {"code": "0195R0", "product_name": "TIGER 삼성전자단일종목레버리지", "underlying_ticker": "005930", "multiple": 2.0, "product_type": "ETF", "issuer": "Mirae Asset", "listed_date": "2026-05-27"},
+    {"code": "0194M0", "product_name": "ACE 삼성전자단일종목레버리지", "underlying_ticker": "005930", "multiple": 2.0, "product_type": "ETF", "issuer": "Korea Investment", "listed_date": "2026-05-27"},
+    {"code": "0192M0", "product_name": "RISE 삼성전자단일종목레버리지", "underlying_ticker": "005930", "multiple": 2.0, "product_type": "ETF", "issuer": "KB Asset", "listed_date": "2026-05-27"},
+    {"code": "0193K0", "product_name": "PLUS 삼성전자단일종목레버리지", "underlying_ticker": "005930", "multiple": 2.0, "product_type": "ETF", "issuer": "Hanwha Asset", "listed_date": "2026-05-27"},
+    {"code": "0194N0", "product_name": "KIWOOM 삼성전자선물단일종목레버리지", "underlying_ticker": "005930", "multiple": 2.0, "product_type": "ETF", "issuer": "Kiwoom Asset", "listed_date": "2026-05-27"},
+    {"code": "0198B0", "product_name": "1Q 삼성전자선물단일종목레버리지", "underlying_ticker": "005930", "multiple": 2.0, "product_type": "ETF", "issuer": "Hana Asset", "listed_date": "2026-05-27"},
+    {"code": "0193L0", "product_name": "PLUS 삼성전자선물단일종목인버스2X", "underlying_ticker": "005930", "multiple": -2.0, "product_type": "ETF", "issuer": "Hanwha Asset", "listed_date": "2026-05-27"},
+    {"code": "0193T0", "product_name": "KODEX SK하이닉스단일종목레버리지", "underlying_ticker": "000660", "multiple": 2.0, "product_type": "ETF", "issuer": "Samsung Asset", "listed_date": "2026-05-27"},
+    {"code": "0195S0", "product_name": "TIGER SK하이닉스단일종목레버리지", "underlying_ticker": "000660", "multiple": 2.0, "product_type": "ETF", "issuer": "Mirae Asset", "listed_date": "2026-05-27"},
+    {"code": "0194T0", "product_name": "ACE SK하이닉스단일종목레버리지", "underlying_ticker": "000660", "multiple": 2.0, "product_type": "ETF", "issuer": "Korea Investment", "listed_date": "2026-05-27"},
+    {"code": "0192L0", "product_name": "RISE SK하이닉스단일종목레버리지", "underlying_ticker": "000660", "multiple": 2.0, "product_type": "ETF", "issuer": "KB Asset", "listed_date": "2026-05-27"},
+    {"code": "0197W0", "product_name": "SOL SK하이닉스단일종목레버리지", "underlying_ticker": "000660", "multiple": 2.0, "product_type": "ETF", "issuer": "Shinhan Asset", "listed_date": "2026-05-27"},
+    {"code": "0194R0", "product_name": "KIWOOM SK하이닉스선물단일종목레버리지", "underlying_ticker": "000660", "multiple": 2.0, "product_type": "ETF", "issuer": "Kiwoom Asset", "listed_date": "2026-05-27"},
+    {"code": "0198D0", "product_name": "1Q SK하이닉스선물단일종목레버리지", "underlying_ticker": "000660", "multiple": 2.0, "product_type": "ETF", "issuer": "Hana Asset", "listed_date": "2026-05-27"},
+    {"code": "0197X0", "product_name": "SOL SK하이닉스선물단일종목인버스2X", "underlying_ticker": "000660", "multiple": -2.0, "product_type": "ETF", "issuer": "Shinhan Asset", "listed_date": "2026-05-27"},
+    # TODO: KRX 정보데이터시스템 또는 KIS 종목마스터파일로 정확한 코드 확인 후 채울 것 (설계 §6.1, §14)
+    {"code": None, "product_name": "TIGER 삼성전자레버리지", "underlying_ticker": "005930", "multiple": 2.0, "product_type": "ETN", "issuer": "Mirae Asset", "listed_date": "2026-05-27"},
+    {"code": None, "product_name": "TIGER SK하이닉스레버리지", "underlying_ticker": "000660", "multiple": 2.0, "product_type": "ETN", "issuer": "Mirae Asset", "listed_date": "2026-05-27"},
+]

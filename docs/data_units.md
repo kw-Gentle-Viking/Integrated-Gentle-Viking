@@ -25,6 +25,16 @@
 
 | 테이블.컬럼 | 소스 API 필드 | 상태 |
 |---|---|---|
-| `leverage_daily.close_price` | KIS ETF/ETN 현재가 API | Task 8 Step 6에서 1종목 1일치로 확인 예정 |
-| `leverage_daily.aum` | KIS ETF/ETN NAV 비교추이 API | 위와 동일 |
-| `leverage_daily.nav` | KIS ETF/ETN NAV 비교추이 API | 위와 동일 |
+| `leverage_daily.volume` | KIS `acml_vol` (FHKST03010100) | Task 8 Step 6에서 확인됨 → 아래로 이동 |
+| `leverage_daily.aum` | KIS 일일 NAV/AUM 조회 불가 | 역사 데이터 미제공, NULL로 유지 |
+| `leverage_daily.nav` | KIS 일일 NAV/AUM 조회 불가 | 역사 데이터 미제공, NULL로 유지 |
+
+---
+
+## 확인된 단위 추가 (Task 8, 2026-09-08)
+
+| 테이블.컬럼 | 소스 API 필드 | 원본 단위 | 배율 | 확인 근거 |
+|---|---|---|---|---|
+| `leverage_daily.close_price` | KIS `stck_clpr` (FHKST03010100) | raw 원 | × 1 | 2026-09-08 1종목(0193W0) 실제 데이터: 가격 20,975원으로 합리적인 ETF 가격대 확인됨 |
+| `leverage_daily.volume` | KIS `acml_vol` (FHKST03010100) | 주 | × 1 | 위와 동일, 누적 거래량 65M으로 수량 단위 확인됨 |
+| `leverage_daily.turnover` | KIS `acml_tr_pbmn` (FHKST03010100) | raw 원 | × 1 | 위와 동일, 가격×거래량 비율이 0.93~1.08 범위(VWAP 기반이라 완전 1은 아니지만 원 단위 확인) |
