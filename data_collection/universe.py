@@ -42,10 +42,13 @@ def fetch_snapshot_prices(client: KisClient, tickers: list[str], snapshot_date: 
         if not rows:
             continue
         row = rows[0]
+        # output2(일별 시세)엔 상장주식수가 없다 — 같은 응답의 output1(현재가)에서 가져온다.
+        # 조회 시점(현재) 기준 값이라 2019년 당시 주식수의 근사치임(원본 프로젝트와 동일한 한계).
+        shares = data.get("output1", {}).get("lstn_stcn")
         results.append({
             "ticker": ticker,
             "close_price": float(row.get("stck_clpr") or 0) or None,
-            "shares_outstanding": int(row.get("lstn_stcn") or 0) or None,
+            "shares_outstanding": int(shares) if shares else None,
         })
     return results
 

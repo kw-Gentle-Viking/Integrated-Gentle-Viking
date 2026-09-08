@@ -8,6 +8,12 @@ KIS_API_INTERVAL = 0.056
 
 
 def parse_daily_price_response(raw: dict, ticker: str) -> list[dict]:
+    # output2(일별 시세)엔 상장주식수 필드가 없다 — output1(현재가 조회, 같은 응답에 포함)의
+    # lstn_stcn을 대신 쓴다. 이 값은 "조회 시점 현재" 기준이라 과거 각 행에 근사치로 적용되는
+    # 것이며, 원본 캡스톤 프로젝트도 동일한 방식(현재값으로 과거 NULL을 채움)을 썼다.
+    shares_outstanding = raw.get("output1", {}).get("lstn_stcn")
+    shares_outstanding = int(shares_outstanding) if shares_outstanding else None
+
     rows = []
     for r in raw.get("output2", []):
         volume = int(r.get("acml_vol") or 0)
@@ -20,7 +26,7 @@ def parse_daily_price_response(raw: dict, ticker: str) -> list[dict]:
             "open_price": float(r["stck_oprc"]), "high_price": float(r["stck_hgpr"]),
             "low_price": float(r["stck_lwpr"]), "close_price": float(r["stck_clpr"]),
             "volume": volume, "turnover": float(r["acml_tr_pbmn"]),
-            "shares_outstanding": int(r["lstn_stcn"]),
+            "shares_outstanding": shares_outstanding,
         })
     return rows
 
