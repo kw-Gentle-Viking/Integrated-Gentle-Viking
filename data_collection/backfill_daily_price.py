@@ -1,6 +1,10 @@
 from datetime import datetime, timedelta
+import time
 import psycopg2
 from data_collection.kis_client import KisClient
+
+# KIS API rate limit: ~18 calls per second
+KIS_API_INTERVAL = 0.056
 
 
 def parse_daily_price_response(raw: dict, ticker: str) -> list[dict]:
@@ -61,5 +65,6 @@ def backfill_ticker(client: KisClient, dsn: str, ticker: str,
                     "FID_INPUT_DATE_2": cursor_end.strftime("%Y%m%d"),
                     "FID_PERIOD_DIV_CODE": "D", "FID_ORG_ADJ_PRC": "1"},
         )
+        time.sleep(KIS_API_INTERVAL)  # Respect KIS API rate limit: ~18 calls/sec
         upsert_price_daily(dsn, parse_daily_price_response(raw, ticker))
         cursor_end = cursor_start - timedelta(days=1)
