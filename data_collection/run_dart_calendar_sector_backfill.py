@@ -9,7 +9,7 @@ Usage:
 This script:
 1. Backfills stock_events from DART disclosure reports (via dart_fss API)
 2. Builds and upserts trading calendar with short-selling ban periods
-3. Backfills sector daily OHLCV from KIS API (25 sector codes)
+3. Backfills sector daily OHLCV from KIS API (20 sector codes)
 4. Upserts market_events with BOK, FOMC, and witching day schedules
 
 Do NOT run during production collection windows (08:55-15:30, 15:50-16:10).
@@ -26,13 +26,12 @@ from data_collection.backfill_dart_calendar_sector import (
     upsert_sector_daily_ohlcv, upsert_calendar, build_calendar_rows,
 )
 
-# 25 major Korean sector indices (업종지수)
+
+# 원본 캡스톤 프로젝트의 SECTOR_ID_TO_CODE 매핑과 동일(sector_id 0~19 → 20개 섹터).
+# 2026-09-08 라이브로 0005~0026 전체 검증: 0022/0023만 무효(빈 응답), 나머지 20개 실존 확인.
 SECTOR_CODES = [
-    "0001", "0010", "0020", "0030", "0040", "0050",
-    "0060", "0070", "0080", "0090", "0100", "0110",
-    "0120", "0130", "0140", "0150", "0160", "0170",
-    "0180", "0190", "0200", "0210", "0220", "0230",
-    "0240",
+    "0005", "0006", "0007", "0008", "0009", "0010", "0011", "0012", "0013", "0014",
+    "0015", "0016", "0017", "0018", "0019", "0020", "0021", "0024", "0025", "0026",
 ]
 
 # KIS API rate limit: ~18 calls per second

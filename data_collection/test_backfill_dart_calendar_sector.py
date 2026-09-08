@@ -55,7 +55,7 @@ def test_smoke_dart_calendar_sector_imports():
     from data_collection.run_dart_calendar_sector_backfill import (
         SECTOR_CODES, backfill_calendar, backfill_sector_daily_ohlcv,
     )
-    assert len(SECTOR_CODES) == 25, f"Expected 25 sector codes, got {len(SECTOR_CODES)}"
+    assert len(SECTOR_CODES) == 20, f"Expected 20 sector codes, got {len(SECTOR_CODES)}"
     assert all(isinstance(code, str) and len(code) == 4 for code in SECTOR_CODES)
 
 
