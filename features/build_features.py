@@ -10,9 +10,30 @@ import sys
 import argparse
 from datetime import datetime
 import psycopg2
+import psycopg2.extras
 import pandas as pd
 import numpy as np
 from features.leverage_features import aggregate_leverage_signals
+
+# market_id cardinality-3 design (see training/config.py STATIC_COLS / static_categorical_cardinalities):
+# 0=KOSDAQ, 1=KOSPI, 2=unclassified (reserved fallback; ticker_universe.is_kospi is NOT NULL for all
+# 200 tickers today, so 2 is never actually hit, but kept for forward-compatibility with new tickers).
+MARKET_ID_KOSPI = 1
+MARKET_ID_KOSDAQ = 0
+MARKET_ID_UNCLASSIFIED = 2
+
+# sector_id cardinality-21 design: 0-19 are the 20 known "업종지수" sectors (see
+# data_collection/backfill_sector_id.py SECTOR_NAMES), 20 = unclassified fallback.
+SECTOR_ID_UNCLASSIFIED = 20
+
+
+def derive_market_id(is_kospi) -> int:
+    """ticker_universe.is_kospi(bool) -> market_id(0/1/2). Pure function, unit-testable."""
+    if is_kospi is True:
+        return MARKET_ID_KOSPI
+    if is_kospi is False:
+        return MARKET_ID_KOSDAQ
+    return MARKET_ID_UNCLASSIFIED
 
 
 def load_tickers(dsn: str) -> list[str]:
@@ -317,6 +338,15 @@ def merge_features(price_df: pd.DataFrame, market_global_df: pd.DataFrame,
     ticker_to_sector = ticker_universe_df[['ticker', 'sector_id']].drop_duplicates()
     feature_pool = feature_pool.merge(ticker_to_sector, on='ticker', how='left')
     feature_pool = feature_pool.merge(sector_df, on='trade_date', how='left')
+    # Any ticker missing a sector_id match (should not happen post-backfill, but defensive
+    # for future new tickers) falls back to the documented "unclassified" bucket, not NULL.
+    feature_pool['sector_id'] = feature_pool['sector_id'].fillna(SECTOR_ID_UNCLASSIFIED).astype(int)
+
+    # Join market_id (derived from ticker_universe.is_kospi — see derive_market_id())
+    ticker_to_market = ticker_universe_df[['ticker', 'is_kospi']].drop_duplicates().copy()
+    ticker_to_market['market_id'] = ticker_to_market['is_kospi'].apply(derive_market_id)
+    feature_pool = feature_pool.merge(ticker_to_market[['ticker', 'market_id']], on='ticker', how='left')
+    feature_pool['market_id'] = feature_pool['market_id'].fillna(MARKET_ID_UNCLASSIFIED).astype(int)
 
     # Join calendar
     # Convert boolean columns to int before merging
@@ -546,20 +576,21 @@ def build_feature_pool(dsn: str, start_date: str, end_date: str) -> None:
 
 
 def upsert_feature_pool(dsn: str, df: pd.DataFrame) -> None:
-    """Upsert feature_pool DataFrame to database."""
+    """Upsert feature_pool DataFrame to database using a parameterized, batched upsert
+    (psycopg2.extras.execute_values) rather than string-concatenating values into SQL text.
+    String concatenation was fragile to inf/-inf floats (e.g. from divide-by-zero in disparity/
+    volume_ratio calcs) producing invalid SQL literals — those now round-trip safely as NULL."""
     conn = psycopg2.connect(dsn)
 
-    # Create feature_pool table if not exists
+    non_pk_cols = [c for c in df.columns if c not in ('ticker', 'trade_date')]
+
+    # Create feature_pool table if not exists, and add any newly-introduced columns
+    # (e.g. market_id) to an already-existing table.
     with conn.cursor() as cur:
-        # Get column types from dataframe (skip ticker and trade_date, they're PK)
         columns_sql = []
-        for col in df.columns:
-            if col in ['ticker', 'trade_date']:
-                continue  # Skip primary key columns
+        for col in non_pk_cols:
             dtype = df[col].dtype
-            if col == 'sector_id':
-                col_type = 'INT'
-            elif col == 'day_of_week':
+            if col in ('sector_id', 'market_id', 'day_of_week'):
                 col_type = 'INT'
             elif dtype == 'float64':
                 col_type = 'NUMERIC'
@@ -567,9 +598,9 @@ def upsert_feature_pool(dsn: str, df: pd.DataFrame) -> None:
                 col_type = 'BIGINT'
             else:
                 col_type = 'NUMERIC'
-            columns_sql.append(f"{col} {col_type}")
+            columns_sql.append((col, col_type))
 
-        columns_sql_str = ", ".join(columns_sql)
+        columns_sql_str = ", ".join(f"{c} {t}" for c, t in columns_sql)
         if columns_sql_str:
             columns_sql_str = ", " + columns_sql_str
 
@@ -583,45 +614,29 @@ def upsert_feature_pool(dsn: str, df: pd.DataFrame) -> None:
         """
         cur.execute(create_table_sql)
 
-    # Batch upsert rows using multiple INSERT statements
-    print("Preparing data for batch insert...")
+        for col, col_type in columns_sql:
+            cur.execute(f"ALTER TABLE feature_pool ADD COLUMN IF NOT EXISTS {col} {col_type}")
+    conn.commit()
 
-    print("Executing batch insert...")
+    # Replace +/-inf (e.g. divide-by-zero in disparity/volume_ratio) with NULL, and NaN with
+    # None so psycopg2 can bind them as parameters rather than needing string literals.
+    print("Preparing data for parameterized batch upsert...")
+    insert_cols = list(df.columns)
+    clean_df = df[insert_cols].replace([np.inf, -np.inf], np.nan)
+    clean_df = clean_df.astype(object).where(pd.notna(clean_df), None)
+    values = list(clean_df.itertuples(index=False, name=None))
+
+    conflict_update = ", ".join(f"{c} = EXCLUDED.{c}" for c in non_pk_cols)
+    insert_sql = f"""
+        INSERT INTO feature_pool ({', '.join(insert_cols)})
+        VALUES %s
+        ON CONFLICT (ticker, trade_date) DO UPDATE SET {conflict_update}
+    """
+
+    print("Executing parameterized batch upsert...")
     with conn.cursor() as cur:
-        # Build batch INSERT statements (PostgreSQL supports multiple rows in one INSERT)
-        batch_size = 1000
-        for batch_start in range(0, len(df), batch_size):
-            batch_end = min(batch_start + batch_size, len(df))
-            batch_rows = df.iloc[batch_start:batch_end]
-
-            # Build the VALUES clause for multiple rows
-            values_list = []
-            for _, row in batch_rows.iterrows():
-                row_values = []
-                for col in df.columns:
-                    val = row[col]
-                    if pd.isna(val):
-                        row_values.append('NULL')
-                    elif isinstance(val, str):
-                        row_values.append(f"'{val}'")
-                    elif isinstance(val, (int, float)):
-                        row_values.append(str(val))
-                    else:
-                        row_values.append(f"'{val}'")
-                values_list.append(f"({', '.join(row_values)})")
-
-            # Build INSERT statement
-            insert_sql = f"""
-                INSERT INTO feature_pool ({', '.join(df.columns)})
-                VALUES {', '.join(values_list)}
-                ON CONFLICT (ticker, trade_date) DO UPDATE SET
-                {', '.join([f'{col} = EXCLUDED.{col}' for col in df.columns if col not in ['ticker', 'trade_date']])}
-            """
-            cur.execute(insert_sql)
-
-            if (batch_end) % 10000 == 0:
-                print(f"  Upserted {batch_end} rows...")
-            conn.commit()
+        psycopg2.extras.execute_values(cur, insert_sql, values, page_size=1000)
+    conn.commit()
 
     conn.close()
     print(f"Batch upsert complete: {len(df)} rows")

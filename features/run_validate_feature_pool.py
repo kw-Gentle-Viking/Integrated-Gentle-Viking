@@ -13,6 +13,18 @@ from features.validate_feature_pool import (
     check_market_cap_consistency, check_value_ranges, check_null_rates, check_trading_day_gaps,
 )
 
+# check_market_cap_consistency's tolerance is a *relative* difference: abs(a-b)/max(a,b), which
+# saturates near 1.0 for any large discrepancy (e.g. a=1, b=1000 -> rel_diff=0.999). We're
+# comparing ticker_universe.market_cap (2019-01-02 snapshot) against a market cap freshly computed
+# from price_daily on the most recent trade_date — 7+ years apart, so ordinary price appreciation
+# or decline (even a multi-bagger, even a stock down 90%) is expected and NOT a bug. A genuine unit
+# bug (off by 1e3x, 1e6x — e.g. mixing 원 and 백만원) shows up as a ~1000x+ magnitude gap, which
+# maps to rel_diff > 0.999. tolerance=0.99 (~100x magnitude gap) is deliberately generous: it
+# tolerates decades of organic price/split drift while still catching any real order-of-thousands
+# unit bug. See features/test_validate_feature_pool.py's original tolerance=0.1 test, which is a
+# same-day cross-check (different scenario) and is unaffected by this constant.
+MARKET_CAP_CROSS_CHECK_TOLERANCE = 0.99
+
 
 def load_feature_pool(dsn: str) -> pd.DataFrame:
     """Load feature_pool table from database."""
@@ -33,48 +45,48 @@ def load_ticker_universe(dsn: str) -> pd.DataFrame:
     return df
 
 
-def adapt_market_cap_cross_check(feature_pool_df: pd.DataFrame) -> tuple[list[str], str]:
+def adapt_market_cap_cross_check(feature_pool_df: pd.DataFrame,
+                                  ticker_universe_df: pd.DataFrame) -> tuple[list[str], str]:
     """
-    Adapted market cap cross-check: since daily_valuation is intentionally empty,
-    compute market cap from price_daily (close_price × shares_outstanding) and compare
-    against ticker_universe.market_cap.
+    Adapted market cap cross-check: daily_valuation is intentionally empty (confirmed dead end,
+    KIS free API has no historical support), so this compares two INDEPENDENTLY-computed market
+    caps instead:
+      - universe_market_cap: ticker_universe.market_cap, computed at the 2019-01-02 snapshot
+      - valuation_market_cap: price_daily.close_price x price_daily.shares_outstanding on the
+        most recent trade_date in feature_pool (7+ years later)
 
-    This tests self-consistency: do the derived market caps from price_daily match
-    the snapshot from ticker_universe (with reasonable tolerance)?
+    These will legitimately differ (different dates, share count may have changed via splits/
+    buybacks, multi-year price moves) so this is a sanity check for unit bugs (off by 1e3x, 1e6x),
+    not a same-day cross-check — see MARKET_CAP_CROSS_CHECK_TOLERANCE above for the reasoning.
+    Actually runs check_market_cap_consistency() and returns its real result (previously this
+    function computed values but never compared them, so `issues` was unconditionally empty).
     """
-    issues = []
-    notes = []
-
     # Get most recent date per ticker
     latest_dates = feature_pool_df.groupby('ticker')['trade_date'].max().reset_index()
+    latest_rows = feature_pool_df.merge(latest_dates, on=['ticker', 'trade_date'], how='inner')
 
-    for _, row in latest_dates.iterrows():
-        ticker = row['ticker']
-        latest_date = row['trade_date']
+    valuation_df = latest_rows[['ticker', 'trade_date', 'close_price', 'shares_outstanding']].copy()
+    valuation_df['valuation_market_cap'] = valuation_df['close_price'] * valuation_df['shares_outstanding']
 
-        # Get price_daily market cap for this ticker on latest date
-        feature_row = feature_pool_df[
-            (feature_pool_df['ticker'] == ticker) &
-            (feature_pool_df['trade_date'] == latest_date)
-        ]
+    universe_df = ticker_universe_df[['ticker', 'market_cap']].rename(
+        columns={'market_cap': 'universe_market_cap'})
 
-        if feature_row.empty:
-            continue
+    compare_df = valuation_df.merge(universe_df, on='ticker', how='inner')
+    compare_df = compare_df.dropna(subset=['valuation_market_cap', 'universe_market_cap'])
 
-        close_price = feature_row.iloc[0]['close_price']
-        shares_outstanding = feature_row.iloc[0]['shares_outstanding']
+    issues = check_market_cap_consistency(compare_df, tolerance=MARKET_CAP_CROSS_CHECK_TOLERANCE)
 
-        if close_price is None or shares_outstanding is None or shares_outstanding == 0:
-            continue
-
-        # Compute market cap from price data
-        computed_market_cap = close_price * shares_outstanding
-
-        # In a real scenario, we'd compare against daily_valuation.market_cap here.
-        # Since it's empty, we just log this as informational.
-        notes.append(f"{ticker} on {latest_date.strftime('%Y-%m-%d')}: computed market cap = {computed_market_cap:.2e} won")
-
-    note_text = f"Market cap cross-check: daily_valuation is empty (intentional). Computed market caps from price_daily for {len(notes)} tickers. Sample: {notes[:3] if notes else 'no data'}"
+    samples = [
+        f"{r.ticker} on {r.trade_date.strftime('%Y-%m-%d')}: universe={r.universe_market_cap:.2e}, "
+        f"valuation(recomputed)={r.valuation_market_cap:.2e}"
+        for r in compare_df.head(3).itertuples()
+    ]
+    note_text = (
+        f"Market cap cross-check: compared {len(compare_df)} tickers "
+        f"(universe snapshot 2019-01-02 vs price_daily-recomputed on latest trade_date), "
+        f"tolerance={MARKET_CAP_CROSS_CHECK_TOLERANCE} (~100x magnitude gap). "
+        f"Sample: {samples if samples else 'no data'}"
+    )
     return issues, note_text
 
 
@@ -100,6 +112,10 @@ def run_validation(dsn: str = None) -> None:
     feature_pool_df = load_feature_pool(dsn)
     print(f"  Loaded {len(feature_pool_df)} rows, {len(feature_pool_df.columns)} columns")
 
+    print("Loading ticker_universe...")
+    ticker_universe_df = load_ticker_universe(dsn)
+    print(f"  Loaded {len(ticker_universe_df)} rows")
+
     # Get date range
     min_date = feature_pool_df['trade_date'].min()
     max_date = feature_pool_df['trade_date'].max()
@@ -123,16 +139,16 @@ def run_validation(dsn: str = None) -> None:
         "",
     ]
 
-    # Check 1: Market cap consistency (adapted)
+    # Check 1: Market cap consistency (adapted — real comparison, see adapt_market_cap_cross_check)
     print("Running market cap consistency check (adapted for empty daily_valuation)...")
-    issues, note_text = adapt_market_cap_cross_check(feature_pool_df)
+    issues, note_text = adapt_market_cap_cross_check(feature_pool_df, ticker_universe_df)
     report_lines.append("### Market Cap Consistency")
     if issues:
         report_lines.append(f"**Issues found: {len(issues)}**")
         for ticker in issues:
             report_lines.append(f"  - {ticker}")
     else:
-        report_lines.append("✓ No major discrepancies found (daily_valuation is intentionally empty)")
+        report_lines.append("✓ No major discrepancies found (real cross-check against ticker_universe.market_cap)")
     report_lines.append(f"  {note_text}")
     report_lines.append("")
 
@@ -219,10 +235,10 @@ def run_validation(dsn: str = None) -> None:
 
     # Summary
     report_lines.append("## Overall Status")
-    if not issues and not value_issues and not gap_issues:
+    if not issues and not value_issues and not null_issues and not gap_issues:
         report_lines.append("✓ **All checks passed. Feature pool is ready for use.**")
     else:
-        all_issues = len(issues) + len(value_issues) + len(gap_issues)
+        all_issues = len(issues) + len(value_issues) + len(null_issues) + len(gap_issues)
         report_lines.append(f"⚠ **Found {all_issues} issue(s). Review details above.**")
 
     # Write report

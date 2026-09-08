@@ -1,24 +1,23 @@
 # Feature Pool Validation Report
-Generated: 2026-09-08 23:36:40
+Generated: 2026-09-09 00:47:41
 
 ## Summary
 - feature_pool rows: 376,682
-- Columns: 154
+- Columns: 155
 - Tickers: 200
 - Date range: 2019-01-02 to 2026-09-08
 
 ## Validation Checks
 
 ### Market Cap Consistency
-✓ No major discrepancies found (daily_valuation is intentionally empty)
-  Market cap cross-check: daily_valuation is empty (intentional). Computed market caps from price_daily for 200 tickers. Sample: ['000080 on 2026-09-08: computed market cap = 1.08e+12 won', '000100 on 2026-09-08: computed market cap = 5.82e+12 won', '000120 on 2026-09-08: computed market cap = 1.68e+12 won']
+✓ No major discrepancies found (real cross-check against ticker_universe.market_cap)
+  Market cap cross-check: compared 200 tickers (universe snapshot 2019-01-02 vs price_daily-recomputed on latest trade_date), tolerance=0.99 (~100x magnitude gap). Sample: ['000080 on 2026-09-08: universe=1.14e+12, valuation(recomputed)=1.08e+12', '000100 on 2026-09-08: universe=1.54e+13, valuation(recomputed)=5.82e+12', '000120 on 2026-09-08: universe=3.80e+12, valuation(recomputed)=1.68e+12']
 
 ### Value Ranges
 ✓ All values within expected ranges
 
 ### Null Rates
-**High null rate columns (> 50%): 1**
-  - sector_id: 100.0%
+✓ All columns within acceptable null rate (< 50%)
 
 ### Trading Day Gaps
 **Tickers with insufficient days (< 1804): 1**
