@@ -157,7 +157,10 @@ def backfill_market_indices(client: KisClient, dsn: str,
     for index_code in ["0001", "1001"]:  # KOSPI, KOSDAQ
         cursor_end_idx = cursor_end
         while cursor_end_idx >= start:
-            cursor_start = max(start, cursor_end_idx - timedelta(days=140))
+            # inquire-daily-indexchartprice는 요청 기간과 무관하게 호출당 최신 50행만 주고
+            # 나머지는 조용히 버린다(daily-price의 ~100행 캡보다 작음, 2026-09-08 라이브로 확인) —
+            # 140일 청크는 구멍이 생기므로 60일(약 40영업일, 50 미만 안전마진)로 사용한다.
+            cursor_start = max(start, cursor_end_idx - timedelta(days=60))
             raw = client.request(
                 path="/uapi/domestic-stock/v1/quotations/inquire-daily-indexchartprice",
                 tr_id="FHKUP03500100",
