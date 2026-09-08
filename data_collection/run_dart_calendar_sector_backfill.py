@@ -136,17 +136,25 @@ def backfill_sector_daily_ohlcv(client: KisClient, dsn: str,
             # CRITICAL: inquire-daily-indexchartprice silently caps at 50 rows per call
             # (live-verified 2026-09-08). Use 60-day chunks (not 140) to stay safely under cap.
             cursor_start = max(start, cursor_end_idx - timedelta(days=60))
-            raw = client.request(
-                path="/uapi/domestic-stock/v1/quotations/inquire-daily-indexchartprice",
-                tr_id="FHKUP03500100",
-                params={
-                    "FID_COND_MRKT_DIV_CODE": "U",  # 업종(sector)
-                    "FID_INPUT_ISCD": sector_code,
-                    "FID_INPUT_DATE_1": cursor_start.strftime("%Y%m%d"),
-                    "FID_INPUT_DATE_2": cursor_end_idx.strftime("%Y%m%d"),
-                    "FID_PERIOD_DIV_CODE": "D",
-                },
-            )
+            try:
+                raw = client.request(
+                    path="/uapi/domestic-stock/v1/quotations/inquire-daily-indexchartprice",
+                    tr_id="FHKUP03500100",
+                    params={
+                        "FID_COND_MRKT_DIV_CODE": "U",  # 업종(sector)
+                        "FID_INPUT_ISCD": sector_code,
+                        "FID_INPUT_DATE_1": cursor_start.strftime("%Y%m%d"),
+                        "FID_INPUT_DATE_2": cursor_end_idx.strftime("%Y%m%d"),
+                        "FID_PERIOD_DIV_CODE": "D",
+                    },
+                )
+            except Exception as exc:
+                # 한 청크의 일시적 API 오류(500 등)로 섹터 전체 백필이 중단되면 안 된다 —
+                # 스킵하고 다음 청크로 진행(2026-09-08 라이브 실행 중 섹터 0180에서 발생 확인).
+                print(f"[skip {cursor_start.strftime('%Y%m%d')}-{cursor_end_idx.strftime('%Y%m%d')}: {exc}]", end=" ", flush=True)
+                time.sleep(KIS_API_INTERVAL)
+                cursor_end_idx = cursor_start - timedelta(days=1)
+                continue
             time.sleep(KIS_API_INTERVAL)
             call_count += 1
 
