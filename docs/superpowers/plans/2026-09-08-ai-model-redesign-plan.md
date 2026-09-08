@@ -929,7 +929,7 @@ git commit -m "feat: backfill macro data from yfinance and FRED"
 
 **Interfaces:**
 - Consumes: `KisClient` (Task 2)
-- Produces: `classify_dart_event(report_name: str) -> str | None` (키워드 → 이벤트 타입 매핑, 원본 `init_dart.py` 로직 계승), `build_calendar_rows(start: str, end: str, short_selling_ban_periods: list[tuple[str, str]]) -> list[dict]`
+- Produces: `classify_dart_event(report_name: str) -> str | None` (키워드 → 이벤트 타입 매핑, 원본 `init_dart.py` 로직 계승), `build_calendar_rows(start: str, end: str, short_selling_ban_periods: list[tuple[str, str]]) -> list[dict]`, `parse_dart_reports(raw_reports: list[dict], ticker: str) -> list[dict]`, `upsert_stock_events(dsn: str, rows: list[dict]) -> None`, `parse_sector_daily_response(raw: dict, sector_code: str) -> list[dict]`, `upsert_sector_daily_ohlcv(dsn: str, rows: list[dict]) -> None`, `upsert_calendar(dsn: str, rows: list[dict]) -> None`
 
 - [ ] **Step 1: 실패하는 테스트 작성**
 
@@ -1017,7 +1017,131 @@ def build_calendar_rows(start: str, end: str,
 Run: `/home/user/miniconda3/envs/kis_collector/bin/python -m pytest data_collection/test_backfill_dart_calendar_sector.py -v`
 Expected: PASS (4 tests)
 
-- [ ] **Step 5: 실행** — DART(`OpenDartReader`, KIS 아님)로 200종목 2019~현재 공시 수집(`stock_events`), 캘린더(`calendar`/`market_events`, 공휴일 라이브러리 + 공매도 금지 기간 하드코딩: 2020-03-16~2021-05-02, 2023-11-06~2099-12-31), 섹터 일봉(KIS `FHKUP03500100`, `sector_daily_ohlcv`, 장외 시간)을 각각 `run_dart_calendar_sector_backfill.py`로 실행
+- [ ] **Step 5: 추가 실패하는 테스트 작성 (stock_events/sector_daily_ohlcv 파싱)**
+
+`data_collection/test_backfill_dart_calendar_sector.py`에 추가:
+
+```python
+from data_collection.backfill_dart_calendar_sector import (
+    parse_dart_reports, parse_sector_daily_response,
+)
+
+
+def test_parse_dart_reports_classifies_and_filters():
+    raw_reports = [
+        {"rcept_dt": "20190315", "report_nm": "유상증자 결정"},
+        {"rcept_dt": "20190316", "report_nm": "최대주주변경"},  # 매핑 안 되는 건 제외
+    ]
+    rows = parse_dart_reports(raw_reports, ticker="005930")
+    assert rows == [{"ticker": "005930", "event_date": "2019-03-15",
+                       "event_type": "유상증자", "description": "유상증자 결정"}]
+
+
+def test_parse_sector_daily_response_extracts_ohlcv():
+    raw = {"output2": [{"stck_bsop_date": "20190102", "bstp_nmix_oprc": "1050.5",
+                          "bstp_nmix_hgpr": "1055.0", "bstp_nmix_lwpr": "1048.0",
+                          "bstp_nmix_prpr": "1052.0", "acml_vol": "500000"}]}
+    rows = parse_sector_daily_response(raw, sector_code="0005")
+    assert rows == [{"sector_code": "0005", "trade_date": "2019-01-02",
+                       "open": 1050.5, "high": 1055.0, "low": 1048.0,
+                       "close": 1052.0, "volume": 500000}]
+```
+
+- [ ] **Step 6: 테스트 실패 확인**
+
+Run: `/home/user/miniconda3/envs/kis_collector/bin/python -m pytest data_collection/test_backfill_dart_calendar_sector.py -v`
+Expected: FAIL (2개 새 테스트, `parse_dart_reports`/`parse_sector_daily_response` 미정의)
+
+- [ ] **Step 7: 구현 — `stock_events`/`sector_daily_ohlcv`/`calendar`/`market_events` upsert 함수 추가**
+
+`data_collection/backfill_dart_calendar_sector.py`에 추가:
+
+```python
+import psycopg2
+from data_collection.kis_client import KisClient
+
+
+def parse_dart_reports(raw_reports: list[dict], ticker: str) -> list[dict]:
+    rows = []
+    for r in raw_reports:
+        event_type = classify_dart_event(r["report_nm"])
+        if event_type is None:
+            continue
+        d = r["rcept_dt"]
+        rows.append({"ticker": ticker, "event_date": f"{d[:4]}-{d[4:6]}-{d[6:]}",
+                      "event_type": event_type, "description": r["report_nm"]})
+    return rows
+
+
+def upsert_stock_events(dsn: str, rows: list[dict]) -> None:
+    if not rows:
+        return
+    conn = psycopg2.connect(dsn)
+    with conn.cursor() as cur:
+        for r in rows:
+            cur.execute(
+                """INSERT INTO stock_events (ticker, event_date, event_type, description)
+                   VALUES (%(ticker)s, %(event_date)s, %(event_type)s, %(description)s)
+                   ON CONFLICT (ticker, event_date, event_type) DO NOTHING""",
+                r,
+            )
+    conn.commit()
+    conn.close()
+
+
+def parse_sector_daily_response(raw: dict, sector_code: str) -> list[dict]:
+    rows = []
+    for r in raw.get("output2", []):
+        d = r["stck_bsop_date"]
+        rows.append({
+            "sector_code": sector_code, "trade_date": f"{d[:4]}-{d[4:6]}-{d[6:]}",
+            "open": float(r["bstp_nmix_oprc"]), "high": float(r["bstp_nmix_hgpr"]),
+            "low": float(r["bstp_nmix_lwpr"]), "close": float(r["bstp_nmix_prpr"]),
+            "volume": int(r["acml_vol"]),
+        })
+    return rows
+
+
+def upsert_sector_daily_ohlcv(dsn: str, rows: list[dict]) -> None:
+    if not rows:
+        return
+    conn = psycopg2.connect(dsn)
+    with conn.cursor() as cur:
+        for r in rows:
+            cur.execute(
+                """INSERT INTO sector_daily_ohlcv (sector_code, trade_date, open, high, low, close, volume)
+                   VALUES (%(sector_code)s, %(trade_date)s, %(open)s, %(high)s, %(low)s, %(close)s, %(volume)s)
+                   ON CONFLICT (sector_code, trade_date) DO UPDATE SET
+                     open = EXCLUDED.open, high = EXCLUDED.high, low = EXCLUDED.low,
+                     close = EXCLUDED.close, volume = EXCLUDED.volume""",
+                r,
+            )
+    conn.commit()
+    conn.close()
+
+
+def upsert_calendar(dsn: str, rows: list[dict]) -> None:
+    conn = psycopg2.connect(dsn)
+    with conn.cursor() as cur:
+        for r in rows:
+            cur.execute(
+                """INSERT INTO calendar (base_date, day_of_week, is_market_open, is_holiday, is_short_selling_banned)
+                   VALUES (%(base_date)s, %(day_of_week)s, %(is_market_open)s, %(is_holiday)s, %(is_short_selling_banned)s)
+                   ON CONFLICT (base_date) DO UPDATE SET
+                     day_of_week = EXCLUDED.day_of_week, is_market_open = EXCLUDED.is_market_open,
+                     is_holiday = EXCLUDED.is_holiday, is_short_selling_banned = EXCLUDED.is_short_selling_banned""",
+                r,
+            )
+    conn.commit()
+    conn.close()
+```
+
+- [ ] **Step 8: 테스트 통과 확인**
+
+Run: `/home/user/miniconda3/envs/kis_collector/bin/python -m pytest data_collection/test_backfill_dart_calendar_sector.py -v`
+Expected: PASS (6 tests)
+
+- [ ] **Step 9: 실행** — DART(`OpenDartReader`, KIS 아님)로 200종목 2019~현재 공시 수집 → `parse_dart_reports` → `upsert_stock_events`, 캘린더(`build_calendar_rows` → `upsert_calendar`, 공휴일 라이브러리 + 공매도 금지 기간 하드코딩: 2020-03-16~2021-05-02, 2023-11-06~2099-12-31, `market_events`도 동일 패턴으로 BOK/FOMC/위칭데이 하드코딩 일정 upsert), 섹터 일봉(KIS `FHKUP03500100`, 25개 섹터 코드 × 2019~현재, `parse_sector_daily_response` → `upsert_sector_daily_ohlcv`, 장외 시간)을 각각 `run_dart_calendar_sector_backfill.py`로 실행
 
 Expected: `stock_events`, `calendar`, `market_events`, `sector_daily_ohlcv` 적재 확인
 
