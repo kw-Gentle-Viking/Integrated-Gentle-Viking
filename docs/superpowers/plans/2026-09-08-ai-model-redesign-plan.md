@@ -1662,7 +1662,7 @@ Expected: PASS (4 tests)
 
 - [ ] **Step 5: `feature_pool` 조인 빌드 구현 및 실행**
 
-`features/build_features.py` — `price_daily`(기술적 지표: log_ret, disparity_5/20/60d, rsi_14 등은 pandas로 계산), `daily_valuation`, `investor_flow_daily`, `market_global`, `market_index_daily`, `sector_daily_ohlcv`, `stock_events`, `calendar`, `market_events`를 ticker+trade_date로 조인하고, `leverage_daily`+`leverage_products`를 `aggregate_leverage_signals`로 집계해 붙이고(2026-05-27 이전은 빈 리스트 → 자동 0), `vi_events`에서 `is_vi_triggered`/`vi_count_recent5d`를 계산해 붙이고, **`labels` 테이블(Task 9)을 (ticker, trade_date)로 조인해서 `label`/`next_day_return` 컬럼을 최종 결과에 포함**시켜 `feature_pool` 테이블에 적재하는 스크립트(Task 9가 먼저 완료되어 `labels`가 채워져 있어야 이 조인이 의미 있음 — Task 9 → Task 10 순서 의존성). 여기엔 §7 원칙대로 만들 수 있는 피처를 전부 포함시킨다(추후 ablation에서 subset 선택).
+`features/build_features.py` — `price_daily`(기술적 지표: log_ret, disparity_5/20/60d, rsi_14 등은 pandas로 계산), `market_global`, `market_index_daily`, `sector_daily_ohlcv`, `stock_events`, `calendar`, `market_events`를 ticker+trade_date로 조인하고(`daily_valuation`/`investor_flow_daily`는 히스토리 백필 불가로 조인 대상에서 제외 — 위 T13 주석 참고), `leverage_daily`+`leverage_products`를 `aggregate_leverage_signals`로 집계해 붙이고(2026-05-27 이전은 빈 리스트 → 자동 0), `vi_events`에서 `is_vi_triggered`/`vi_count_recent5d`를 계산해 붙이고, **`labels` 테이블(Task 9)을 (ticker, trade_date)로 조인해서 `label`/`next_day_return` 컬럼을 최종 결과에 포함**시켜 `feature_pool` 테이블에 적재하는 스크립트(Task 9가 먼저 완료되어 `labels`가 채워져 있어야 이 조인이 의미 있음 — Task 9 → Task 10 순서 의존성). 여기엔 §7 원칙대로 만들 수 있는 피처를 전부 포함시킨다(추후 ablation에서 subset 선택).
 
 Run: `/home/user/miniconda3/envs/kis_collector/bin/python features/build_features.py --start 2019-01-02 --end <today>`
 Expected: `feature_pool` 테이블에 200종목 × 전체 기간 행 적재, 컬럼 수가 기존 55개 + 레버리지 6개 이상
@@ -2127,11 +2127,16 @@ from omegaconf import OmegaConf, DictConfig
 
 # 설계 §4, §5: 기존 55개 기반 + 레버리지 6개 등 feature_pool 전체 컬럼 중
 # ablation(Task 15)에서 선택된 subset이 여기로 주입된다.
+# 2026-09-08 라이브 백필 중 확인: KIS 무료 API는 PER/PBR/시총(daily_valuation)과
+# 수급(investor_flow_daily) 둘 다 과거 시점 데이터를 지원하지 않음(전자는 API 자체가 "현재"만
+# 반환, 후자는 최근 30영업일 롤링만 가능 — 히스토리 백필 불가). 사용자 결정: PER/PBR은 이번
+# 사이클에서 포기, 수급은 보류(토스증권 API — 발급된 키 있음, 별도 클라이언트 코드 필요, 추후
+# 검토). daily_valuation/investor_flow_daily 테이블·백필 코드(Task 5)는 남겨두되(추후 토스 연동
+# 대비) feature_pool에는 조인하지 않고, 아래 목록에서도 제외한다.
 HISTORICAL_COLS_DEFAULT = [
     "rel_close", "rel_high", "rel_low", "log_ret", "disparity_5", "disparity_20", "disparity_60",
     "vol_ratio", "rsi_14", "bb_position", "macd_ratio", "macd_signal_ratio", "macd_hist_ratio",
     "log_ret_1d", "disparity_5d", "disparity_20d", "disparity_60d", "volatility_20d",
-    "prop_individual", "prop_foreign", "prop_institution", "per", "pbr", "per_chg_1d", "pbr_chg_1d",
     "kospi_ret", "kosdaq_ret", "snp500_ret", "nasdaq_ret", "phlx_semi_ret", "vix_chg",
     "usd_krw_chg", "us_10y_yield_chg", "rate_spread_us_kr", "wti_ret", "gold_ret",
     "sector_ret_1d", "sector_ret_5d", "sector_ret_20d", "sector_ma_ratio_20d",
