@@ -23,6 +23,8 @@
 - 평가 핵심 지표: Macro F1(그 외 Accuracy/클래스별 P·R·F1/Confusion Matrix/MCC 병기), 1단계와 2단계(레버리지 국면) 성능은 항상 분리 리포트
 - encoder 길이 60거래일 고정
 - 신규 인프라(TorchServe, BentoML 등) 도입 금지 — 기존 `api_server.py`/crontab 패턴 재사용
+- 금액/거래대금 관련 새 API 응답 필드는 대량 백필 전에 반드시 1건 샘플로 단위(원 vs 백만원 등)를 수동 확인한다 — 기존 KIS 필드(`hts_avls`, `*_tr_pbmn` 등)는 이미 pipeline_overview.md에 배율이 문서화돼 있지만, 처음 다루는 API(레버리지 ETF/ETN NAV·AUM 등)는 확인된 바 없음
+- 데이터 정합성은 클리핑(이상치 처리, Task 11)과 별개 문제 — 독립 소스 간 교차검증(예: 두 가지 방식으로 계산한 시가총액 비교), 값 범위, 결측률, 종목별 거래일수 갭 검증을 Task 10에서 수행하고 통과해야 다음 단계로 진행
 
 ---
 
@@ -1171,7 +1173,7 @@ git commit -m "feat: backfill DART events, trading calendar, and sector OHLCV"
 **Interfaces:**
 - Produces: `LEVERAGE_PRODUCTS: list[dict]` (설계 §6.1 표, ETN 2종 코드는 `None`으로 두고 TODO 주석 — 구현 시 KRX 정보데이터시스템에서 확인 후 채움)
 - Produces: `parse_vi_event_response(raw: dict, ticker: str) -> list[dict]`
-- Produces: `save_leverage_products(dsn: str) -> None`, `upsert_leverage_daily(dsn: str, rows: list[dict]) -> None`, `upsert_vi_events(dsn: str, rows: list[dict]) -> None`
+- Produces: `save_leverage_products(dsn: str) -> None`, `upsert_leverage_daily(dsn: str, rows: list[dict]) -> None`, `upsert_vi_events(dsn: str, rows: list[dict]) -> None`, `parse_leverage_daily_response(raw: dict, code: str) -> dict | None` (Step 7에서 구현, 정확한 필드/배율은 Step 6의 수동 단위 검증 결과에 따름 — 이 시점에 미리 확정하지 않음)
 
 - [ ] **Step 1: 실패하는 테스트 작성**
 
@@ -1336,13 +1338,36 @@ def upsert_vi_events(dsn: str, rows: list[dict]) -> None:
 Run: `/home/user/miniconda3/envs/kis_collector/bin/python -m pytest data_collection/test_leverage_products.py data_collection/test_backfill_leverage.py -v`
 Expected: PASS (5 tests)
 
-- [ ] **Step 5: ETN 코드 확인 + 실행**
+- [ ] **Step 5: ETN 코드 확인**
 
-KRX 정보데이터시스템(data.krx.co.kr)에서 "TIGER 삼성전자레버리지"/"TIGER SK하이닉스레버리지" 종목코드 조회 → `leverage_products.py`의 `code: None` 두 곳 채우기 → 위 5개 테스트 재실행(PASS 유지 확인) → `save_leverage_products(dsn)` 실행 → `run_leverage_backfill.py`로 18종 × 2026-05-27~현재 가격/거래량/AUM(KIS ETF/ETN 현재가+NAV API) 및 삼성전자·SK하이닉스 VI 이력(KIS VI 현황 API, 2019~현재) 백필 실행(장외 시간)
+KRX 정보데이터시스템(data.krx.co.kr)에서 "TIGER 삼성전자레버리지"/"TIGER SK하이닉스레버리지" 종목코드 조회 → `leverage_products.py`의 `code: None` 두 곳 채우기 → 위 5개 테스트 재실행(PASS 유지 확인) → `save_leverage_products(dsn)` 실행
 
-Expected: `leverage_products` 18행, `leverage_daily` 18종×영업일수, `vi_events`에 2026-05-27 이후 급증 확인
+- [ ] **Step 6: 단위 검증(중요) — 대량 백필 전에 반드시 1종목 1일치로 먼저 확인**
 
-- [ ] **Step 6: Commit**
+KIS ETF/ETN 현재가+NAV API 응답의 가격·거래량·NAV·AUM 필드가 실제로 어떤 단위(원 vs 백만원 vs 좌 단위 등)로 오는지 이 시점까지 확인된 바 없음 — `daily_valuation`(Task 5)에서 `hts_avls`가 "백만원 단위"라 `×1,000,000`이 필요했던 것과 같은 함정이 이 API에도 있을 수 있음. 대량 백필 전에 반드시 손으로 확인한다.
+
+```python
+# 삼성전자 레버리지 ETF 1종(코드 0193W0) 1영업일치(예: 2026-06-01)만 조회
+raw = client.request(path="/uapi/etfetn/v1/quotations/inquire-price",  # 정확한 path/tr_id는 KIS Developers 포털에서 재확인
+                       tr_id="FHPST02400000", params={...})
+print(raw)
+```
+
+체크리스트(전부 통과해야 다음 단계 진행):
+1. 가격(`close_price`)이 상식적인 ETF 가격대(수백~수만 원)인지 — 원 단위가 아니라 다른 배율로 와있으면 자릿수가 이상하게 튐
+2. `nav`가 `close_price`와 비슷한 자릿수인지(NAV와 시장가는 보통 크게 안 벌어짐)
+3. `aum`이 `nav × 상장좌수` 근사치와 맞아떨어지는지 — 상장좌수는 종목마스터파일이나 별도 조회로 확인
+4. 위 3개 중 하나라도 예상과 다른 자릿수면, 실제 KIS 응답 필드 원본을 그대로 보고 올바른 배율을 역산해서 `parse_leverage_daily_response()`(Step 7에서 구현)에 반영
+
+이 확인 결과(사용한 정확한 배율과 그 근거)를 리포트에 남길 것.
+
+- [ ] **Step 7: 확인된 단위로 파싱 함수 구현 + 실행**
+
+Step 6에서 확인한 배율을 반영해 `parse_leverage_daily_response(raw: dict, code: str) -> dict | None`을 구현(패턴은 Task 5의 `parse_valuation_response`와 동일하게 딕셔너리 반환 + `upsert_leverage_daily` 호출). `run_leverage_backfill.py`로 18종 × 2026-05-27~현재 가격/거래량/AUM/NAV 백필 + 삼성전자·SK하이닉스 VI 이력(KIS VI 현황 API, 2019~현재) 백필 실행(장외 시간)
+
+Expected: `leverage_products` 18행, `leverage_daily` 18종×영업일수, `vi_events`에 2026-05-27 이후 급증 확인. 백필 직후 `SELECT code, avg(close_price), avg(aum) FROM leverage_daily GROUP BY code`로 Step 6 체크리스트 자릿수가 전체 데이터에서도 유지되는지 재확인
+
+- [ ] **Step 8: Commit**
 
 ```bash
 git add data_collection/leverage_products.py data_collection/backfill_leverage.py data_collection/test_leverage_products.py data_collection/test_backfill_leverage.py
@@ -1530,15 +1555,18 @@ git commit -m "feat: add next-day return labeling with data-derived threshold, p
 
 ---
 
-## Task 10: 피처 조인(`feature_pool`) + 레버리지 파생 피처 계산
+## Task 10: 피처 조인(`feature_pool`) + 레버리지 파생 피처 계산 + 데이터 정합성 검증
 
 **Files:**
 - Create: `features/leverage_features.py`
 - Create: `features/build_features.py`
+- Create: `features/validate_feature_pool.py`
 - Test: `features/test_leverage_features.py`
+- Test: `features/test_validate_feature_pool.py`
 
 **Interfaces:**
 - Consumes: `LEVERAGE_PRODUCTS` (Task 8), `labels` table populated by Task 9's `upsert_labels` (반드시 Task 9가 먼저 완료돼 있어야 함)
+- Produces: `check_market_cap_consistency(df, tolerance=0.1) -> list[str]`, `check_value_ranges(df) -> list[str]`, `check_null_rates(df, max_null_ratio=0.3) -> dict[str, float]`, `check_trading_day_gaps(df, expected_min_days) -> list[str]`
 - Produces: `compute_rebalancing_flow(prev_aum: float, underlying_return: float, multiple: float) -> float`, `aggregate_leverage_signals(product_rows: list[dict], underlying_return: float, underlying_market_cap: float) -> dict` (returns `lev_total_volume`, `lev_total_aum`, `lev_aum_to_mktcap`, `est_rebalancing_flow`)
 - Produces: `build_feature_pool(dsn: str, start_date: str, end_date: str) -> None` (조인 → `feature_pool` 테이블 생성/적재, `label`/`next_day_return` 컬럼 포함)
 
@@ -1629,11 +1657,138 @@ Expected: PASS (4 tests)
 Run: `/home/user/miniconda3/envs/kis_collector/bin/python features/build_features.py --start 2019-01-02 --end <today>`
 Expected: `feature_pool` 테이블에 200종목 × 전체 기간 행 적재, 컬럼 수가 기존 55개 + 레버리지 6개 이상
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 6: 실패하는 테스트 작성 (데이터 정합성 검증 — 순수 함수)**
+
+`features/test_validate_feature_pool.py` (신규 파일):
+
+```python
+import pandas as pd
+import pytest
+from features.validate_feature_pool import (
+    check_market_cap_consistency, check_value_ranges, check_null_rates, check_trading_day_gaps,
+)
+
+
+def test_market_cap_cross_check_flags_large_discrepancy():
+    # ticker_universe(price*shares)와 daily_valuation(hts_avls*1e6)이 독립적으로 계산된 시총 —
+    # 단위 버그가 있으면 이 둘이 자릿수 단위로 어긋난다
+    df = pd.DataFrame({
+        "ticker": ["005930", "000660"],
+        "universe_market_cap": [4.5e14, 9.0e13],
+        "valuation_market_cap": [4.51e14, 9.0e7],  # 000660은 1e6배 축소된 버그 상황 가정
+    })
+    issues = check_market_cap_consistency(df, tolerance=0.1)
+    assert issues == ["000660"]
+
+
+def test_market_cap_cross_check_passes_when_close():
+    df = pd.DataFrame({"ticker": ["005930"], "universe_market_cap": [4.5e14],
+                         "valuation_market_cap": [4.52e14]})
+    assert check_market_cap_consistency(df, tolerance=0.1) == []
+
+
+def test_check_value_ranges_flags_negative_price_or_volume():
+    df = pd.DataFrame({"close_price": [50000.0, -100.0], "volume": [1000, -5]})
+    issues = check_value_ranges(df)
+    assert "close_price" in issues
+    assert "volume" in issues
+
+
+def test_check_null_rates_flags_columns_over_threshold():
+    df = pd.DataFrame({"per": [None, None, None, 1.0], "close_price": [1, 2, 3, 4]})
+    issues = check_null_rates(df, max_null_ratio=0.5)
+    assert issues == {"per": pytest.approx(0.75)}
+
+
+def test_check_trading_day_gaps_flags_ticker_with_missing_days():
+    df = pd.DataFrame({
+        "ticker": ["005930"] * 3 + ["000660"] * 5,
+        "trade_date": pd.to_datetime(["2019-01-02", "2019-01-03", "2019-01-04"] +
+                                       list(pd.bdate_range("2019-01-02", periods=5))),
+    })
+    # 삼성전자는 3일치뿐인데 SK하이닉스는 5일치 — 같은 기간 대비 종목별 행 수 편차 검출
+    issues = check_trading_day_gaps(df, expected_min_days=5)
+    assert issues == ["005930"]
+```
+
+- [ ] **Step 7: 테스트 실패 확인**
+
+Run: `/home/user/miniconda3/envs/kis_collector/bin/python -m pytest features/test_validate_feature_pool.py -v`
+Expected: FAIL (`ModuleNotFoundError`)
+
+- [ ] **Step 8: 구현**
+
+`features/validate_feature_pool.py` (신규 파일):
+
+```python
+import pandas as pd
+
+
+def check_market_cap_consistency(df: pd.DataFrame, tolerance: float = 0.1) -> list[str]:
+    """두 독립 소스(시총 스냅샷 계산 vs KIS 밸류에이션 API)로 구한 시총이 tolerance 이상 어긋나면
+    단위 변환 버그일 가능성이 높다 — 티커 목록 반환."""
+    flagged = []
+    for _, row in df.iterrows():
+        a, b = row["universe_market_cap"], row["valuation_market_cap"]
+        if a == 0 or b == 0:
+            flagged.append(row["ticker"])
+            continue
+        rel_diff = abs(a - b) / max(a, b)
+        if rel_diff > tolerance:
+            flagged.append(row["ticker"])
+    return flagged
+
+
+def check_value_ranges(df: pd.DataFrame) -> list[str]:
+    """가격은 양수, 거래량은 0 이상이어야 함 — 위반 컬럼명 반환."""
+    issues = []
+    if "close_price" in df.columns and (df["close_price"] <= 0).any():
+        issues.append("close_price")
+    if "volume" in df.columns and (df["volume"] < 0).any():
+        issues.append("volume")
+    return issues
+
+
+def check_null_rates(df: pd.DataFrame, max_null_ratio: float = 0.3) -> dict[str, float]:
+    """컬럼별 결측 비율이 max_null_ratio를 넘으면 {컬럼명: 실제비율} 반환."""
+    issues = {}
+    for col in df.columns:
+        ratio = df[col].isna().mean()
+        if ratio > max_null_ratio:
+            issues[col] = ratio
+    return issues
+
+
+def check_trading_day_gaps(df: pd.DataFrame, expected_min_days: int) -> list[str]:
+    """종목별 행 수가 expected_min_days에 못 미치면 수집 누락 의심 — 티커 목록 반환."""
+    counts = df.groupby("ticker").size()
+    return counts[counts < expected_min_days].index.tolist()
+```
+
+- [ ] **Step 9: 테스트 통과 확인**
+
+Run: `/home/user/miniconda3/envs/kis_collector/bin/python -m pytest features/test_validate_feature_pool.py -v`
+Expected: PASS (5 tests)
+
+- [ ] **Step 10: 실제 `feature_pool`에 대해 실행**
+
+```python
+# features/run_validate_feature_pool.py:
+# 1) ticker_universe.market_cap과 daily_valuation.market_cap(같은 ticker, 가장 최근 공통 날짜)을 조인해서
+#    check_market_cap_consistency 실행 — 걸린 티커가 있으면 즉시 중단하고 원인(단위 배율) 조사
+# 2) feature_pool 전체에 check_value_ranges, check_null_rates(max_null_ratio=0.3, per/pbr/prop_*는 §8
+#    원칙대로 별도 허용치 적용), check_trading_day_gaps(expected_min_days= 2019~현재 영업일수의 90%) 실행
+# 3) 결과를 features/validation_report.md에 정리(문제 없으면 "이상 없음", 있으면 티커/컬럼 목록)
+```
+
+Run: `/home/user/miniconda3/envs/kis_collector/bin/python features/run_validate_feature_pool.py`
+Expected: `features/validation_report.md` 생성, 시총 교차검증 불일치 0건(0건이 아니면 Task 8/5의 단위 배율부터 재점검 — Task 11로 넘어가지 말 것)
+
+- [ ] **Step 11: Commit**
 
 ```bash
-git add features/leverage_features.py features/build_features.py features/test_leverage_features.py
-git commit -m "feat: build joined feature_pool table with leverage-derived features"
+git add features/leverage_features.py features/build_features.py features/test_leverage_features.py features/validate_feature_pool.py features/test_validate_feature_pool.py features/run_validate_feature_pool.py
+git commit -m "feat: build joined feature_pool table with leverage-derived features and data-integrity validation"
 ```
 
 ---
