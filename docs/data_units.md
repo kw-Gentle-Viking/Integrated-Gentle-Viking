@@ -37,6 +37,7 @@
 |---|---|---|---|---|
 | `leverage_daily.close_price` | KIS `stck_clpr` (FHKST03010100) | raw 원 | × 1 | 2026-09-08 1종목(0193W0) 실제 데이터: 가격 20,975원으로 합리적인 ETF 가격대 확인됨 |
 | `leverage_daily.volume` | KIS `acml_vol` (FHKST03010100) | 주 | × 1 | 위와 동일, 누적 거래량 65M으로 수량 단위 확인됨 |
+| `leverage_daily.turnover` | KIS `acml_tr_pbmn` (FHKST03010100) | raw 원 | × 1 | 위와 동일, 가격×거래량 비율이 0.93~1.08 범위(VWAP 기반이라 완전 1은 아니지만 원 단위 확인) |
 
 ---
 
@@ -65,4 +66,3 @@ Task 13 리뷰에서 발견된 스코프 갭 — `feature_pool`엔 매크로 원
 **첫 거래일(2019-01-02) 결측**: `pct_change()`/`diff()` 기반 10개 컬럼(`rate_spread_us_kr` 제외 전부)은 전일 데이터가 구조적으로 없어 NULL — ffill 대상 아님, Task 3의 상장일 결측과 같은 성격의 진짜 최초 시점 구조적 결측. `rate_spread_us_kr`은 당일 레벨 차분이라 전일 의존이 없어 첫 거래일에도 NULL 없음. 라이브 검증(2026-09-09): 200개 티커 × 10개 컬럼 = 정확히 2,000개 셀이 2019-01-02에만 NULL, 그 외 날짜/컬럼 조합엔 NULL 0건.
 
 **브리프와의 편차**: 브리프 Step 5.5는 "9개 컬럼 NULL"이라 적었으나, 브리프 자신의 공식표(11개 컬럼 중 `rate_spread_us_kr` 1개만 당일 레벨 차분이고 나머지 10개가 `pct_change`/`diff` 기반)를 그대로 따르면 11-1=10개가 맞음 — `pct_change`/`diff`는 정의상 첫 원소가 항상 NaN이므로 10이 수학적으로 옳은 값. 실측도 10을 확인함(브리프의 "9"는 단순 계산 오류로 판단, 공식표 자체는 그대로 따름).
-| `leverage_daily.turnover` | KIS `acml_tr_pbmn` (FHKST03010100) | raw 원 | × 1 | 위와 동일, 가격×거래량 비율이 0.93~1.08 범위(VWAP 기반이라 완전 1은 아니지만 원 단위 확인) |
