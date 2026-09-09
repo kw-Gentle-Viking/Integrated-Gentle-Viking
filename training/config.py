@@ -18,13 +18,21 @@ from omegaconf import OmegaConf, DictConfig
 # 않는다 — Task 11의 `features/run_fit_clip_scale.py` 상단 주석에서 이미 같은 간극을
 # "build_features.py / Task 13이 처리할 gap"으로 명시적으로 플래그해 두었음. 이번 Task 13의
 # 실제 작업 범위(config.py/train.py/test_config.py)에는 그 파생 피처 계산(원본 레벨 →
-# 수익률/변화량 변환) 로직이 포함되어 있지 않으므로, 여기서는 라이브 스키마에 실존하는
-# 컬럼만 남기고 나머지는 드롭한다. 매크로/지수 계열(코스피·코스닥·S&P500·나스닥·필라델피아
-# 반도체·VIX·환율·금리·유가·금)은 feature_pool에 원시 레벨(snp500_close, vix, usd_krw,
-# us_10y_yield, fed_rate, kr_base_rate, wti_crude_oil, gold_price, index_0001, index_1001,
-# nasdaq_close, phlx_semi_close)로만 존재하고 수익률/변화량 파생본이 전혀 없어 통째로 빠졌다 —
-# 매크로 레짐 신호가 통째로 유실된 상태이므로 후속 태스크(Task 15 ablation 또는 build_features.py
-# 신설)에서 파생 계산을 명시적으로 재검토할 것.
+# 수익률/변화량 변환) 로직이 포함되어 있지 않았으므로, 당시엔 라이브 스키마에 실존하는
+# 컬럼만 남기고 나머지는 드롭했다(23개). 매크로/지수 계열(코스피·코스닥·S&P500·나스닥·
+# 필라델피아 반도체·VIX·환율·금리·유가·금)은 feature_pool에 원시 레벨(snp500_close, vix,
+# usd_krw, us_10y_yield, fed_rate, kr_base_rate, wti_crude_oil, gold_price, index_0001,
+# index_1001, nasdaq_close, phlx_semi_close)로만 존재하고 수익률/변화량 파생본이 전혀 없어
+# 통째로 빠졌었다.
+#
+# 2026-09-09 Task 13 fix round 1 (Task 10.5 follow-up): Task 10.5(`features/add_macro_features.py`,
+# 커밋 5eb4a26)가 위에서 빠졌던 매크로 파생 11개(kospi_ret, kosdaq_ret, snp500_ret, nasdaq_ret,
+# phlx_semi_ret, vix_chg, usd_krw_chg, us_10y_yield_chg, rate_spread_us_kr, wti_ret, gold_ret)를
+# feature_pool에 실제로 계산/백필(72개 컬럼, 376,682행)했으므로, 이제 라이브 스키마에 존재하는
+# 컬럼으로서 목록에 추가한다(23 → 34개). 산식/단위는 `docs/data_units.md`의
+# "feature_pool 매크로 파생 컬럼 11개 (Task 10.5, 2026-09-09)" 절 참고. 나머지 드롭된 파생
+# 피처(rel_close 등, 위 문단)는 여전히 미계산 상태이므로 계속 빠져 있다 — 후속 태스크(Task 15
+# ablation 또는 build_features.py 신설)에서 재검토할 것.
 HISTORICAL_COLS_DEFAULT = [
     "log_ret", "disparity_5d", "disparity_20d", "disparity_60d",
     "rsi_14", "volatility_20d",
@@ -34,6 +42,9 @@ HISTORICAL_COLS_DEFAULT = [
     "day_of_week",
     "lev_total_volume", "lev_total_aum", "lev_aum_to_mktcap", "est_rebalancing_flow",
     "is_vi_triggered", "vi_count_recent5d",
+    "kospi_ret", "kosdaq_ret", "snp500_ret", "nasdaq_ret", "phlx_semi_ret",
+    "vix_chg", "usd_krw_chg", "us_10y_yield_chg", "rate_spread_us_kr",
+    "wti_ret", "gold_ret",
 ]
 KNOWN_FUTURE_COLS = ["time_progress", "is_bok", "is_fomc", "is_witching_kr", "is_witching_us"]
 STATIC_COLS = ["sector_id", "market_id"]
