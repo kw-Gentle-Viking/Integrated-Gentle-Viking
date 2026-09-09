@@ -4,8 +4,9 @@ Fit train-split-only outlier-clipping bounds and a StandardScaler for feature_po
 continuous numeric feature columns, using ONLY the 1단계 train split
 (2019-01-02 ~ 2023-12-31) to avoid leakage into val/test/2단계/serving.
 
-Column selection (live feature_pool has 61 columns as of Task 10's fix round 2 —
-NOT the column list this task's brief was originally drafted against; see
+Column selection (live feature_pool had 61 columns as of Task 10's fix round 2, and now
+has 72 after Task 10.5 added 11 macro derived columns (2026-09-09) — NOT the column
+list this task's brief was originally drafted against; see
 docs/superpowers/plans/2026-09-08-ai-model-redesign-plan.md's Task 13
 HISTORICAL_COLS_DEFAULT for the downstream design intent this selection follows):
 
@@ -15,6 +16,16 @@ Task 13's HISTORICAL_COLS_DEFAULT names verbatim (or a same-shape analogue of):
   volatility_20d, hl_range, lev_total_volume, lev_total_aum, lev_aum_to_mktcap,
   est_rebalancing_flow, sector_ret_1d, sector_ret_5d, sector_ret_20d,
   sector_ma_ratio_20d, sector_volatility, sector_volume_ratio, vi_count_recent5d
+
+INCLUDED (11 more columns, added by this fix round) — macro derived features computed
+by Task 10.5 (commit 5eb4a26, see docs/data_units.md's "feature_pool 매크로 파생 컬럼
+11개" section) directly into feature_pool. These did not exist when Task 11 was first
+written (hence the original EXCLUDED note below, now stale for these names). All are
+stationary by construction — percentage returns (pct_change), absolute changes (diff),
+or a same-day rate spread — not raw trending levels, so quantile-clipping/scaling them
+is legitimate:
+  kospi_ret, kosdaq_ret, snp500_ret, nasdaq_ret, phlx_semi_ret, vix_chg, usd_krw_chg,
+  us_10y_yield_chg, rate_spread_us_kr, wti_ret, gold_ret
 
 EXCLUDED, and why:
   - ticker, trade_date: identifiers, not features
@@ -39,13 +50,20 @@ EXCLUDED, and why:
     ~2.5% in 2019 vs ~5%+ later) — quantile-clipping bounds fit only on 2019-2023
     train would clip out genuinely-shifted-regime future values as if they were
     outliers, which is exactly the failure mode train-only fitting is supposed to
-    avoid causing downstream. Task 13's HISTORICAL_COLS_DEFAULT wants *_ret/*_chg
-    derived versions of these (vix_chg, usd_krw_chg, us_10y_yield_chg, wti_ret,
-    gold_ret, kospi_ret, kosdaq_ret, snp500_ret, nasdaq_ret, phlx_semi_ret,
-    rate_spread_us_kr) — none of which exist yet in feature_pool. Deriving those is
-    feature-engineering work belonging to build_features.py / Task 13, out of scope
-    for Task 11 (clipping/scaling only operates on columns that already exist). This
-    is flagged as a known gap in the Task 11 report, not silently worked around here.
+    avoid causing downstream. This remains correctly excluded and is NOT affected by
+    Task 10.5: their *_ret/*_chg derived counterparts (see the second INCLUDED list
+    above) are now in feature_pool and included, but these raw levels are still
+    non-stationary and stay out.
+
+NaN handling for the 11 new macro-derived columns: 10 of the 11 (all except
+rate_spread_us_kr, which is a same-day level difference with no prior-day dependency)
+are NULL for exactly the first trading day in the whole dataset (2019-01-02, 200 rows
+— one per ticker, a structural pandas pct_change()/diff() first-element artifact
+documented in docs/data_units.md, not a data gap). This is the same shape of NaN
+pattern log_ret already has and already handles correctly via fit_clip_bounds's
+~np.isnan filtering and StandardScaler's native NaN-aware fit — no new NaN-handling
+code was needed for these columns; see the Task 11 fix-round-1 report for how this was
+verified.
 
 Usage:
   set -a && source .env && set +a
@@ -69,6 +87,10 @@ CLIP_SCALE_COLUMNS = [
     "sector_ret_1d", "sector_ret_5d", "sector_ret_20d", "sector_ma_ratio_20d",
     "sector_volatility", "sector_volume_ratio",
     "vi_count_recent5d",
+    # Task 10.5 macro derived columns (added by this fix round; see docstring above)
+    "kospi_ret", "kosdaq_ret", "snp500_ret", "nasdaq_ret", "phlx_semi_ret",
+    "vix_chg", "usd_krw_chg", "us_10y_yield_chg", "rate_spread_us_kr",
+    "wti_ret", "gold_ret",
 ]
 
 ARTIFACT_PATH = "features/artifacts/stage1"
