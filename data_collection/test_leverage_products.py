@@ -7,8 +7,10 @@ def test_has_16_confirmed_etfs_and_2_confirmed_etns():
     assert len(etfs) == 16
     assert len(etns) == 2
     assert all(p["code"] is not None for p in etfs)
-    # 2026-09-09 백로그에서 해결: KIS 종목마스터파일 + KIS 일별시세 API로 검증된 실제 코드
-    assert all(p["code"] is not None for p in etns)
+    # 2026-09-09 백로그에서 해결: KIS 종목마스터파일 + KIS 일별시세 API로 검증된 실제 코드.
+    # code is not None만 확인하면 나중에 실수로 다른(틀린) 코드가 들어가도 못 잡으므로
+    # 정확한 값까지 고정해서 회귀를 방지한다(리뷰 2026-09-09 지적 반영).
+    assert {p["code"] for p in etns} == {"Q520100", "Q520101"}
 
 
 def test_samsung_and_hynix_each_have_one_inverse_product():

@@ -57,7 +57,7 @@ KRX_API_KEY 확보 후 재조사해 해결. 상세 경위·검증 근거는
 | `leverage_products.code` = `Q520100` | 미래에셋 레버리지 삼성전자 단일종목 ETN | `kospi_code.mst` 상장일자 필드 `20260527`(다른 16종과 동일 상장일 일치), KIS 응답 `stck_shrn_iscd`/`hts_kor_isnm`이 코드·명 그대로 일치 |
 | `leverage_products.code` = `Q520101` | 미래에셋 레버리지 SK하이닉스 단일종목ETN | 위와 동일 패턴으로 검증 |
 | `leverage_daily.close_price`(Q520100/Q520101) | raw 원 | 2026-05-27~09-09 73거래일, 가격대 6,940~42,155원 — 기존 16종 범위(5,785~44,000원)와 정합 |
-| `leverage_daily.turnover`(Q520100/Q520101) | raw 원 | 표본 6행 turnover/(price×volume) 비율 0.984~1.039 — Task 8과 동일한 VWAP 오차 범위 |
+| `leverage_daily.turnover`(Q520100/Q520101) | raw 원 | 전체 146행(73거래일×2종목) turnover/(price×volume) 비율 — Q520100 0.922~1.192(평균 1.008), Q520101 0.828~1.192(평균 1.015). 기존 16종의 전체 분포(평균 1.001~1.019, 범위 최대 0.632~1.246)와 통계적으로 구분 안 됨 — 리뷰(2026-09-09)에서 표본 6행 기준이던 걸 전수 재확인 |
 | `leverage_products.code`/`leverage_daily.code` 컬럼 길이 | VARCHAR(7) | ETN 코드가 "Q"+6자리(7자)라 기존 VARCHAR(6)로는 저장 불가 — stock_db_v2에 `ALTER TABLE ... ALTER COLUMN code TYPE VARCHAR(7)` 실행, `db/schema.sql`도 동기화 |
 
 ---
