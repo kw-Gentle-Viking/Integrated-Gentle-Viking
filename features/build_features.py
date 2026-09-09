@@ -14,6 +14,7 @@ import psycopg2.extras
 import pandas as pd
 import numpy as np
 from features.leverage_features import aggregate_leverage_signals
+from features.add_macro_features import NEW_COLUMNS as MACRO_DERIVED_COLUMNS
 
 # market_id cardinality-3 design (see training/config.py STATIC_COLS / static_categorical_cardinalities):
 # 0=KOSDAQ, 1=KOSPI, 2=unclassified (reserved fallback; ticker_universe.is_kospi is NOT NULL for all
@@ -739,12 +740,23 @@ def upsert_feature_pool(dsn: str, df: pd.DataFrame) -> None:
         # sector_ret_1d/5d/20d/sector_ma_ratio_20d/sector_volatility/sector_volume_ratio derived
         # features in Task 10 fix round 2) — a rebuild must fully replace the schema, not just
         # add to it, so stale columns with stale data don't linger.
+        #
+        # IMPORTANT: this script is not the only writer of feature_pool columns.
+        # features/add_macro_features.py (Task 10.5) adds 11 macro derived columns
+        # (kospi_ret, vix_chg, etc.) directly via its own ALTER TABLE, separate from this
+        # script's own df. A 2026-09-09 live re-run of build_features.py (VI feature
+        # recompute) silently DROPPED those 11 columns because they aren't in this
+        # script's own `df.columns` — they had to be restored by re-running
+        # add_macro_features.py afterward. MACRO_DERIVED_COLUMNS is excluded from
+        # staleness here so this can't happen again; if another script starts owning
+        # columns this way in the future, add it to this exclusion set too rather than
+        # re-discovering the same footgun.
         cur.execute("""
             SELECT column_name FROM information_schema.columns
             WHERE table_name = 'feature_pool'
         """)
         existing_cols = {row[0] for row in cur.fetchall()}
-        expected_cols = set(df.columns) | {'ticker', 'trade_date'}
+        expected_cols = set(df.columns) | {'ticker', 'trade_date'} | set(MACRO_DERIVED_COLUMNS)
         stale_cols = existing_cols - expected_cols
         for col in sorted(stale_cols):
             cur.execute(f"ALTER TABLE feature_pool DROP COLUMN IF EXISTS {col}")
