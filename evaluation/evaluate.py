@@ -8,6 +8,15 @@ CLASS_NAMES = {0: "buy", 1: "hold", 2: "sell"}
 
 def compute_metrics(y_true: list[int], y_pred: list[int]) -> dict:
     labels = [0, 1, 2]
+    if len(y_true) == 0:
+        empty_per_class = {label: {"precision": 0.0, "recall": 0.0, "f1": 0.0} for label in labels}
+        return {
+            "accuracy": 0.0,
+            "macro_f1": 0.0,
+            "mcc": 0.0,
+            "per_class": empty_per_class,
+            "confusion_matrix": [[0] * len(labels) for _ in labels],
+        }
     precision, recall, f1, _ = precision_recall_fscore_support(
         y_true, y_pred, labels=labels, zero_division=0)
     per_class = {

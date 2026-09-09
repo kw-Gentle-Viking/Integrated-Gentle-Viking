@@ -30,3 +30,21 @@ def test_split_by_regime_separates_pre_and_post_leverage():
     result = split_by_regime(dates, y_true, y_pred, leverage_start="2026-05-27")
     assert result["pre_leverage"]["accuracy"] == 1.0
     assert result["leverage_era"]["accuracy"] == 0.5
+
+
+def test_compute_metrics_empty_input_does_not_crash():
+    m = compute_metrics([], [])
+    assert m["accuracy"] == 0.0
+    assert m["macro_f1"] == 0.0
+    assert m["mcc"] == 0.0
+    assert m["confusion_matrix"] == [[0, 0, 0], [0, 0, 0], [0, 0, 0]]
+
+
+def test_split_by_regime_handles_one_sided_regime():
+    # 전부 leverage_era 이후인 경우 — pre_leverage가 빈 서브셋이 되어도 크래시하면 안 됨
+    dates = ["2026-06-01", "2026-06-02"]
+    y_true = [0, 1]
+    y_pred = [0, 1]
+    result = split_by_regime(dates, y_true, y_pred, leverage_start="2026-05-27")
+    assert result["pre_leverage"]["accuracy"] == 0.0
+    assert result["leverage_era"]["accuracy"] == 1.0
