@@ -37,4 +37,32 @@
 |---|---|---|---|---|
 | `leverage_daily.close_price` | KIS `stck_clpr` (FHKST03010100) | raw 원 | × 1 | 2026-09-08 1종목(0193W0) 실제 데이터: 가격 20,975원으로 합리적인 ETF 가격대 확인됨 |
 | `leverage_daily.volume` | KIS `acml_vol` (FHKST03010100) | 주 | × 1 | 위와 동일, 누적 거래량 65M으로 수량 단위 확인됨 |
+
+---
+
+## `feature_pool` 매크로 파생 컬럼 11개 (Task 10.5, 2026-09-09)
+
+Task 13 리뷰에서 발견된 스코프 갭 — `feature_pool`엔 매크로 원본 레벨값만 있고 그 파생(수익률/변화량/스프레드)이 없었음. `features/add_macro_features.py`로 라이브 백필 완료(376,682행 전부 UPDATE).
+
+원칙: `_ret` 접미사 = `pct_change()`(무차원 비율), `_chg` 접미사 = `diff()`(원본 단위의 절대 변화량), `rate_spread_us_kr`만 예외로 전일 대비가 아니라 **당일 레벨의 차분**(`us_10y_yield - kr_base_rate`).
+
+| 신규 컬럼 | 원본 컬럼 | 산식 | 단위 |
+|---|---|---|---|
+| `kospi_ret` | `index_0001` | `pct_change()` | 무차원 비율 (예: 0.01 = +1%) |
+| `kosdaq_ret` | `index_1001` | `pct_change()` | 무차원 비율 |
+| `snp500_ret` | `snp500_close` | `pct_change()` | 무차원 비율 |
+| `nasdaq_ret` | `nasdaq_close` | `pct_change()` | 무차원 비율 |
+| `phlx_semi_ret` | `phlx_semi_close` | `pct_change()` | 무차원 비율 |
+| `wti_ret` | `wti_crude_oil` | `pct_change()` | 무차원 비율 |
+| `gold_ret` | `gold_price` | `pct_change()` | 무차원 비율 |
+| `vix_chg` | `vix` | `diff()` | VIX 포인트 절대 변화량(VIX 자체가 이미 %값이라 diff 사용, pct_change 아님) |
+| `usd_krw_chg` | `usd_krw` | `diff()` | 원화 절대 변화량(원/달러), pct 아님 |
+| `us_10y_yield_chg` | `us_10y_yield` | `diff()` | bp(퍼센트포인트) 절대 변화량, pct 아님 |
+| `rate_spread_us_kr` | `us_10y_yield`, `kr_base_rate` | `us_10y_yield - kr_base_rate` (당일 레벨 차분, 전일 대비 아님) | 퍼센트포인트(%p) |
+
+**계산 grain**: 거래일별 값(전종목 동일값 broadcast) — `feature_pool`에서 `trade_date`로 DISTINCT ON dedup 후 날짜순 정렬해서 계산, `trade_date` 기준으로 200종목 전체에 join-back. 종목별로 나눠 계산하면 같은 날짜가 200번 반복돼 diff가 0이 되는 버그가 생기므로 반드시 날짜 grain에서만 계산.
+
+**첫 거래일(2019-01-02) 결측**: `pct_change()`/`diff()` 기반 10개 컬럼(`rate_spread_us_kr` 제외 전부)은 전일 데이터가 구조적으로 없어 NULL — ffill 대상 아님, Task 3의 상장일 결측과 같은 성격의 진짜 최초 시점 구조적 결측. `rate_spread_us_kr`은 당일 레벨 차분이라 전일 의존이 없어 첫 거래일에도 NULL 없음. 라이브 검증(2026-09-09): 200개 티커 × 10개 컬럼 = 정확히 2,000개 셀이 2019-01-02에만 NULL, 그 외 날짜/컬럼 조합엔 NULL 0건.
+
+**브리프와의 편차**: 브리프 Step 5.5는 "9개 컬럼 NULL"이라 적었으나, 브리프 자신의 공식표(11개 컬럼 중 `rate_spread_us_kr` 1개만 당일 레벨 차분이고 나머지 10개가 `pct_change`/`diff` 기반)를 그대로 따르면 11-1=10개가 맞음 — `pct_change`/`diff`는 정의상 첫 원소가 항상 NaN이므로 10이 수학적으로 옳은 값. 실측도 10을 확인함(브리프의 "9"는 단순 계산 오류로 판단, 공식표 자체는 그대로 따름).
 | `leverage_daily.turnover` | KIS `acml_tr_pbmn` (FHKST03010100) | raw 원 | × 1 | 위와 동일, 가격×거래량 비율이 0.93~1.08 범위(VWAP 기반이라 완전 1은 아니지만 원 단위 확인) |
