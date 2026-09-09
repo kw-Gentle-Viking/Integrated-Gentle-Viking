@@ -64,7 +64,7 @@ CREATE TABLE IF NOT EXISTS market_events (
 );
 
 CREATE TABLE IF NOT EXISTS leverage_products (
-    code VARCHAR(6) PRIMARY KEY,
+    code VARCHAR(7) PRIMARY KEY,        -- ETF는 6자, ETN은 "Q"+6자리(7자, 2026-09-09 백로그에서 확인)
     product_name VARCHAR(80) NOT NULL,
     underlying_ticker VARCHAR(6) NOT NULL,
     multiple NUMERIC NOT NULL,          -- +2.0 or -2.0
@@ -74,7 +74,7 @@ CREATE TABLE IF NOT EXISTS leverage_products (
 );
 
 CREATE TABLE IF NOT EXISTS leverage_daily (
-    code VARCHAR(6) NOT NULL, trade_date DATE NOT NULL,
+    code VARCHAR(7) NOT NULL, trade_date DATE NOT NULL,
     close_price NUMERIC, volume BIGINT, turnover NUMERIC, nav NUMERIC, aum NUMERIC,
     PRIMARY KEY (code, trade_date)
 );

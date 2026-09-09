@@ -98,10 +98,14 @@ TFT 원 논문(Electricity 벤치마크)은 약 50만 샘플(8개월치) 사용,
 | SK하이닉스 | KIWOOM SK하이닉스선물단일종목레버리지 | 0194R0 | +2X | ETF |
 | SK하이닉스 | 1Q SK하이닉스선물단일종목레버리지 | 0198D0 | +2X | ETF |
 | SK하이닉스 | SOL SK하이닉스선물단일종목인버스2X | 0197X0 | -2X | ETF |
-| 삼성전자 | TIGER 삼성전자레버리지 | **미확인** | +2X | ETN |
-| SK하이닉스 | TIGER SK하이닉스레버리지 | **미확인** | +2X | ETN |
+| 삼성전자 | 미래에셋 레버리지 삼성전자 단일종목 ETN | Q520100 | +2X | ETN |
+| SK하이닉스 | 미래에셋 레버리지 SK하이닉스 단일종목ETN | Q520101 | +2X | ETN |
 
-> ETN 2종목 코드는 구현 단계에서 KRX 정보데이터시스템 또는 KIS 종목마스터파일로 확인 필요.
+> 2026-09-09 백로그 항목에서 해결: 공식명은 "TIGER"가 아니라 발행사명 그대로인 "미래에셋"(ETN은 KRX 관행상
+> ETF와 브랜드 명명 규칙이 다름). 코드는 KIS 종목마스터파일(`kospi_code.mst`, 미래에셋 issuer 계열 "Q520xxx")로
+> 확인, KIS 일별시세 API 실거래 데이터(상장일 20260527 일치, 가격/거래대금 비율 정상)로 검증 완료.
+> 코드가 "Q"+6자리(7자)라 `leverage_products`/`leverage_daily.code` 컬럼을 VARCHAR(6)→VARCHAR(7)로 확장함.
+> 상세: `.superpowers/sdd/2026-09-08-ai-model-redesign-plan/backlog-etn-codes-report.md`
 
 ### 6.2 데이터 소스
 
@@ -200,6 +204,6 @@ KIS Developers API로 전량 수집 가능(확인 완료, 별도 API 연동 불�
 
 ## 14. 미해결 항목
 
-- ETN 2종목(TIGER 삼성전자레버리지, TIGER SK하이닉스레버리지) 정확한 종목코드 — 구현 단계에서 확인
+- ~~ETN 2종목(TIGER 삼성전자레버리지, TIGER SK하이닉스레버리지) 정확한 종목코드~~ — 2026-09-09 해결(Q520100/Q520101, §6.1 참고)
 - 라벨 threshold 정확한 수치 — 데이터 수집 후 역산으로 결정
 - `est_rebalancing_flow` 등 신규 피처의 실제 예측력은 검증 전 — §7 ablation에서 최종 판단

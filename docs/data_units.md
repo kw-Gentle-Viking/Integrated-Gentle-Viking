@@ -41,6 +41,27 @@
 
 ---
 
+## 백로그: ETN 2종목 코드 해결 + 백필 (2026-09-09)
+
+Task 8에서 `code: None`으로 남겨뒀던 ETN 2종목(TIGER 삼성전자레버리지/TIGER SK하이닉스레버리지, 이름은 당시 추정치)을
+KRX_API_KEY 확보 후 재조사해 해결. 상세 경위·검증 근거는
+`.superpowers/sdd/2026-09-08-ai-model-redesign-plan/backlog-etn-codes-report.md` 참고.
+
+**KRX Open API(`etp/etn_bydd_trd`)는 이 키로 이용 신청이 안 돼 있어(전체 `etp` 카테고리 401, `sto`/`idx`는 200 — 키 자체는
+유효함을 대조 확인) 사용 불가.** 대신 KIS 공식 종목마스터파일(`kospi_code.mst`, koreainvestment/open-trading-api 레포의
+`kis_kospi_code_mst.py` 파싱 로직 그대로 사용)에서 발행사 코드 "Q520"(미래에셋) 계열로 후보를 찾고, KIS 일별시세 API
+(FHKST03010100)로 실거래 데이터를 받아 교차검증했다.
+
+| 테이블.컬럼 | 값 | 확인 근거 |
+|---|---|---|
+| `leverage_products.code` = `Q520100` | 미래에셋 레버리지 삼성전자 단일종목 ETN | `kospi_code.mst` 상장일자 필드 `20260527`(다른 16종과 동일 상장일 일치), KIS 응답 `stck_shrn_iscd`/`hts_kor_isnm`이 코드·명 그대로 일치 |
+| `leverage_products.code` = `Q520101` | 미래에셋 레버리지 SK하이닉스 단일종목ETN | 위와 동일 패턴으로 검증 |
+| `leverage_daily.close_price`(Q520100/Q520101) | raw 원 | 2026-05-27~09-09 73거래일, 가격대 6,940~42,155원 — 기존 16종 범위(5,785~44,000원)와 정합 |
+| `leverage_daily.turnover`(Q520100/Q520101) | raw 원 | 표본 6행 turnover/(price×volume) 비율 0.984~1.039 — Task 8과 동일한 VWAP 오차 범위 |
+| `leverage_products.code`/`leverage_daily.code` 컬럼 길이 | VARCHAR(7) | ETN 코드가 "Q"+6자리(7자)라 기존 VARCHAR(6)로는 저장 불가 — stock_db_v2에 `ALTER TABLE ... ALTER COLUMN code TYPE VARCHAR(7)` 실행, `db/schema.sql`도 동기화 |
+
+---
+
 ## `feature_pool` 매크로 파생 컬럼 11개 (Task 10.5, 2026-09-09)
 
 Task 13 리뷰에서 발견된 스코프 갭 — `feature_pool`엔 매크로 원본 레벨값만 있고 그 파생(수익률/변화량/스프레드)이 없었음. `features/add_macro_features.py`로 라이브 백필 완료(376,682행 전부 UPDATE).
