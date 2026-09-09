@@ -256,8 +256,66 @@ def load_stock_events(dsn: str, start_date: str, end_date: str) -> pd.DataFrame:
     return events_pivot
 
 
-def load_vi_events(dsn: str, start_date: str, end_date: str) -> pd.DataFrame:
-    """Load vi_events table and create VI flags."""
+def compute_vi_features(vi_raw_df: pd.DataFrame, trading_days_df: pd.DataFrame) -> pd.DataFrame:
+    """Compute is_vi_triggered / vi_count_recent5d from raw vi_events rows (ticker, triggered_at)
+    against each ticker's actual trading-day calendar.
+
+    Pure function, independent of DB access -- unit-testable (see test_build_features.py).
+
+    trading_days_df: DataFrame with ['ticker', 'trade_date'] columns giving every trading day
+    each ticker actually has (e.g. price_df) -- this is the trading-day-indexed pattern used
+    everywhere else in this file for genuine trailing-N-day features (disparity_5d,
+    volatility_20d, sector_ret_5d, ...).
+
+    vi_count_recent5d is the sum of that ticker's VI event counts over the actual trailing 5
+    TRADING DAYS ending on trade_date (inclusive). Per-day VI counts are first joined onto the
+    ticker's full trading-day calendar (non-event days filled with 0) and THEN rolled over that
+    date-indexed series -- rolling directly over vi_raw_df's sparse VI-event-only rows (the
+    previous implementation) sums the last 5 EVENT-days regardless of how many real trading
+    days separate them, which is wrong whenever a ticker's VI events are infrequent.
+    """
+    trading_days = (
+        trading_days_df[['ticker', 'trade_date']]
+        .drop_duplicates()
+        .sort_values(['ticker', 'trade_date'])
+        .reset_index(drop=True)
+    )
+
+    if vi_raw_df.empty:
+        result = trading_days.copy()
+        result['is_vi_triggered'] = 0
+        result['vi_count_recent5d'] = 0.0
+        return result[['ticker', 'trade_date', 'is_vi_triggered', 'vi_count_recent5d']]
+
+    df = vi_raw_df.copy()
+    df['triggered_at'] = pd.to_datetime(df['triggered_at'])
+    df['trade_date'] = df['triggered_at'].dt.date
+    df['trade_date'] = pd.to_datetime(df['trade_date'])
+
+    # Per (ticker, trade_date) VI event count, for days an event actually happened.
+    vi_daily = df.groupby(['ticker', 'trade_date']).size().reset_index(name='vi_count')
+
+    # Join onto each ticker's FULL trading-day calendar so non-event days are represented with
+    # vi_count=0 -- required for the rolling window below to be a genuine trailing 5-TRADING-DAY
+    # window rather than a window over sparse VI-event-only rows.
+    vi_full = trading_days.merge(vi_daily, on=['ticker', 'trade_date'], how='left')
+    vi_full['vi_count'] = vi_full['vi_count'].fillna(0)
+    vi_full['is_vi_triggered'] = (vi_full['vi_count'] > 0).astype(int)
+
+    vi_full = vi_full.sort_values(['ticker', 'trade_date']).reset_index(drop=True)
+    vi_full['vi_count_recent5d'] = vi_full.groupby('ticker')['vi_count'].rolling(
+        window=5, min_periods=1
+    ).sum().reset_index(0, drop=True)
+
+    return vi_full[['ticker', 'trade_date', 'is_vi_triggered', 'vi_count_recent5d']]
+
+
+def load_vi_events(dsn: str, start_date: str, end_date: str, trading_days_df: pd.DataFrame) -> pd.DataFrame:
+    """Load vi_events table and create VI flags via compute_vi_features().
+
+    trading_days_df: each ticker's actual trading-day calendar (pass price_df) -- see
+    compute_vi_features() docstring for why this is required for a correct rolling window.
+    """
     conn = psycopg2.connect(dsn)
     query = """
         SELECT ticker, triggered_at, vi_type
@@ -267,23 +325,7 @@ def load_vi_events(dsn: str, start_date: str, end_date: str) -> pd.DataFrame:
     """
     df = pd.read_sql(query, conn, params=(start_date, end_date))
     conn.close()
-    if df.empty:
-        # Return empty DataFrame with expected structure
-        return pd.DataFrame(columns=['ticker', 'trade_date', 'is_vi_triggered', 'vi_count_recent5d'])
-
-    df['triggered_at'] = pd.to_datetime(df['triggered_at'])
-    df['trade_date'] = df['triggered_at'].dt.date
-    df['trade_date'] = pd.to_datetime(df['trade_date'])
-
-    # Create VI flags (count per day, and mark as triggered if count > 0)
-    vi_daily = df.groupby(['ticker', 'trade_date']).size().reset_index(name='vi_count')
-    vi_daily['is_vi_triggered'] = (vi_daily['vi_count'] > 0).astype(int)
-
-    # Calculate 5-day rolling count
-    vi_daily = vi_daily.sort_values(['ticker', 'trade_date']).reset_index(drop=True)
-    vi_daily['vi_count_recent5d'] = vi_daily.groupby('ticker')['vi_count'].rolling(window=5, min_periods=1).sum().reset_index(0, drop=True)
-
-    return vi_daily[['ticker', 'trade_date', 'is_vi_triggered', 'vi_count_recent5d']]
+    return compute_vi_features(df, trading_days_df)
 
 
 def load_leverage_daily_and_products(dsn: str, start_date: str, end_date: str) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -586,7 +628,7 @@ def build_feature_pool(dsn: str, start_date: str, end_date: str) -> None:
     stock_events_df = load_stock_events(dsn, start_date, end_date)
     print(f"  Loaded {len(stock_events_df)} stock_events rows")
 
-    vi_events_df = load_vi_events(dsn, start_date, end_date)
+    vi_events_df = load_vi_events(dsn, start_date, end_date, price_df)
     print(f"  Loaded {len(vi_events_df)} vi_events rows")
 
     leverage_daily_df, leverage_products_df = load_leverage_daily_and_products(dsn, start_date, end_date)

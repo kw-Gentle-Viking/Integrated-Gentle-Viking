@@ -1,6 +1,6 @@
 import pandas as pd
 import pytest
-from features.build_features import compute_sector_derived_features, SECTOR_CODES
+from features.build_features import compute_sector_derived_features, compute_vi_features, SECTOR_CODES
 
 
 def _sector_df(closes, highs=None, lows=None, volumes=None, sector_code="0013"):
@@ -91,6 +91,96 @@ def test_output_columns_are_exactly_key_plus_six_derived_features():
         "sector_code", "trade_date", "sector_ret_1d", "sector_ret_5d", "sector_ret_20d",
         "sector_ma_ratio_20d", "sector_volatility", "sector_volume_ratio",
     ]
+
+
+def _trading_days(ticker, n, start="2020-01-02"):
+    return pd.DataFrame({
+        "ticker": [ticker] * n,
+        "trade_date": pd.bdate_range(start, periods=n),
+    })
+
+
+def test_vi_count_recent5d_does_not_bleed_across_widely_separated_events():
+    # Regression test for the "sparse rolling window" bug: the old implementation rolled
+    # window=5 over vi_daily rows that only existed for days with an actual VI event, so for
+    # a ticker with infrequent VI events the "recent 5" window silently summed the last 5
+    # EVENT-days regardless of how many real trading days separated them. Here two VI events
+    # for the same ticker are 210 trading days apart -- the true trailing-5-trading-day window
+    # around the later event must not include the earlier one.
+    ticker = "005930"
+    trading_days = _trading_days(ticker, 220)
+    early_event_date = trading_days["trade_date"].iloc[0]
+    late_event_date = trading_days["trade_date"].iloc[210]
+
+    vi_raw = pd.DataFrame({
+        "ticker": [ticker, ticker],
+        "triggered_at": [
+            pd.Timestamp(early_event_date) + pd.Timedelta(hours=9, minutes=5),
+            pd.Timestamp(late_event_date) + pd.Timedelta(hours=9, minutes=5),
+        ],
+        "vi_type": ["정적", "정적"],
+    })
+
+    out = compute_vi_features(vi_raw, trading_days)
+
+    late_row = out.loc[out["trade_date"] == late_event_date].iloc[0]
+    assert late_row["is_vi_triggered"] == 1
+    # Only the late event falls within the trailing 5 trading days ending on late_event_date --
+    # the day-0 event (210 trading days earlier) must NOT bleed into this window.
+    assert late_row["vi_count_recent5d"] == pytest.approx(1.0)
+
+    early_row = out.loc[out["trade_date"] == early_event_date].iloc[0]
+    assert early_row["is_vi_triggered"] == 1
+    assert early_row["vi_count_recent5d"] == pytest.approx(1.0)
+
+
+def test_vi_count_recent5d_sums_events_within_true_trailing_5_trading_day_window():
+    ticker = "000660"
+    trading_days = _trading_days(ticker, 30)
+    d = trading_days["trade_date"]
+
+    # Two events 3 trading days apart -- both fall inside a real trailing-5-trading-day window.
+    vi_raw = pd.DataFrame({
+        "ticker": [ticker, ticker],
+        "triggered_at": [
+            pd.Timestamp(d.iloc[10]) + pd.Timedelta(hours=9, minutes=5),
+            pd.Timestamp(d.iloc[13]) + pd.Timedelta(hours=10),
+        ],
+        "vi_type": ["정적", "동적"],
+    })
+
+    out = compute_vi_features(vi_raw, trading_days)
+    row13 = out.loc[out["trade_date"] == d.iloc[13]].iloc[0]
+    assert row13["vi_count_recent5d"] == pytest.approx(2.0)
+
+
+def test_vi_features_cover_every_trading_day_not_just_event_days():
+    # Non-event trading days must appear with is_vi_triggered=0 / vi_count_recent5d=0, not be
+    # absent from the output (the merge back into feature_pool relies on full coverage).
+    ticker = "005930"
+    trading_days = _trading_days(ticker, 10)
+    vi_raw = pd.DataFrame({
+        "ticker": [ticker],
+        "triggered_at": [pd.Timestamp(trading_days["trade_date"].iloc[0]) + pd.Timedelta(hours=9)],
+        "vi_type": ["정적"],
+    })
+
+    out = compute_vi_features(vi_raw, trading_days)
+    assert len(out) == 10
+    no_event_row = out.loc[out["trade_date"] == trading_days["trade_date"].iloc[5]].iloc[0]
+    assert no_event_row["is_vi_triggered"] == 0
+    assert no_event_row["vi_count_recent5d"] == pytest.approx(0.0)
+
+
+def test_vi_features_empty_input_returns_full_trading_day_calendar_all_zero():
+    ticker = "005930"
+    trading_days = _trading_days(ticker, 5)
+    empty_vi = pd.DataFrame(columns=["ticker", "triggered_at", "vi_type"])
+
+    out = compute_vi_features(empty_vi, trading_days)
+    assert len(out) == 5
+    assert (out["is_vi_triggered"] == 0).all()
+    assert (out["vi_count_recent5d"] == 0).all()
 
 
 def test_sector_codes_has_20_entries_matching_documented_mapping():

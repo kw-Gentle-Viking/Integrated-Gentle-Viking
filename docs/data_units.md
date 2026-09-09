@@ -109,3 +109,17 @@ Task 8에서 시도했던 KIS TR `FHKST02900200`(404 확인됨)와 별개로, `v
 **완전성 관련 중요 발견**: 시장 전체 조회(`FID_INPUT_ISCD=""`)는 호출당 최대 30행으로 캡핑됨(라이브로 확인). 전체 스윕(2005거래일×2시장=4,010콜)에서 **87%(3,488/4,010)가 이 캡에 걸림** — 애초 예상("드문 극단적 변동일에만 걸림")과 크게 다름. 티커 지정 조회(`FID_INPUT_ISCD=<ticker>`)는 캡 없음(검증: 007120 단일종목 조회 시 그 종목의 실제 4건 전부 정상 반환). 보완용 티커별 재조회를 캡된 3,488개 (시장,날짜) 쌍에 대해 실행했으나 예산(4,000콜)이 2019년 데이터부터 소진되어 2026-05-27 인근은 커버 못함 — 이후 **2026-05-27 ±10거래일(21일×200종목=4,200콜) 전용 타겟 재검증을 별도 실행**해 이 구간만 캡 없이 완전 커버. 나머지 기간(2019~2026년, 05-27 구간 제외)은 시장전체스윕 표본(캡의 영향으로 실제보다 과소집계 가능성 있음) — 결과표의 "가장 바쁜 날" 랭킹이 05-27 구간에 쏠린 것은 이 커버리지 차이 때문이지 반드시 실제 변동성 차이만은 아님(단, 05-27 구간 자체가 레버리지 ETF 출시로 실제로도 변동성이 컸다는 것은 기초 사실과 일치).
 
 **⚠️Task 11 후속조치 필요**: `features/artifacts/stage1.bounds.json`의 `vi_count_recent5d: [0.0, 0.0]`은 `vi_events`가 항상 비어있던 시절에 적합(fit)된 퇴화(degenerate) 경계값. 이제 실 데이터가 존재하므로 **재적합 필요** — 이 백로그 태스크 스코프 밖이라 직접 재적합하지 않음, `features/build_features.py`(`load_vi_events`)+`features/run_fit_clip_scale.py` 재실행 필요.
+
+### 후속: `vi_count_recent5d` 롤링 윈도우 버그 수정 + 재계산 (2026-09-09)
+
+위 백필(4,926행) 이후 `feature_pool.is_vi_triggered`/`vi_count_recent5d`가 여전히 전체 376,682행 100% 0으로 확인됨 — `vi_events`가 항상 비어있던 시절에 짜인 `load_vi_events()`가 그대로 남아있었기 때문. 재계산 과정에서 버그를 하나 발견해 함께 수정했다.
+
+**버그**: 기존 `load_vi_events()`는 `vi_daily = df.groupby(['ticker','trade_date']).size()`로 만든, **VI 이벤트가 실제로 발생한 날짜만 있는 sparse 프레임**에 대고 바로 `.rolling(window=5)`를 걸었다. 이 프레임엔 이벤트가 없는 날의 행 자체가 없으므로, `window=5`는 "최근 5거래일"이 아니라 "최근 5번의 VI 이벤트 발생일"을 의미하게 된다. VI 이벤트가 드문 종목은 수년 전 이벤트가 이번 이벤트의 "5일 윈도우"에 섞여 들어갈 수 있음 — 이 코드베이스의 다른 모든 `*_5d`/`*_20d` 피처(`disparity_5d`, `sector_ret_5d` 등)가 실제 거래일 인덱스 기반 trailing 윈도우인 것과 어긋남.
+
+**수정**: `features/build_features.py`에 순수 함수 `compute_vi_features(vi_raw_df, trading_days_df)`를 신설(`load_vi_events()`는 이제 DB 조회 후 이 함수를 호출하는 얇은 래퍼). `trading_days_df`(=`price_df`)로 종목별 실제 거래일 캘린더 전체를 만들고, 이벤트 없는 날은 `vi_count=0`으로 채워 넣은 뒤 그 날짜 인덱스 위에서 `.rolling(window=5, min_periods=1)`을 적용 — 다른 trailing-N-거래일 피처와 동일한 패턴. `is_vi_triggered = (vi_count > 0)` 로직 자체는 변경 없음. TDD 근거: `features/test_build_features.py`에 회귀 테스트 4개 추가(210거래일 떨어진 두 이벤트가 서로의 5일 윈도우에 섞이지 않는지, 3거래일 이내 이벤트는 합산되는지, 비이벤트일도 0으로 커버되는지, 빈 입력 처리).
+
+**부수 효과**: `compute_vi_features()`가 이제 (ticker, trade_date) 쌍마다 정확히 한 행을 반환(price_df와 동일한 키 집합)하므로, `merge_features()`의 VI 조인이 완전한 1:1 매치가 됨 — 예전엔 `vi_events_df`가 항상 비어있어 else 분기(0 채움)만 타서 드러나지 않았지만, sparse 프레임을 그대로 좌측 조인했다면 비이벤트 행에 `NaN`이 남는 잠재 버그도 함께 해소됨.
+
+**라이브 재계산 결과**(`python -m features.build_features --start 2019-01-02 --end 2026-09-08`): `is_vi_triggered=1` 376,682행 중 4,426행(= `vi_events`의 고유 (ticker, date) 발동일 수와 일치), `vi_count_recent5d` 분포는 0~14 사이(0: 356,795 / 1: 16,729 / 2: 2,250 / ... / 14: 1) — 더 이상 100% 0이 아님. 스팟체크: `000660`(SK하이닉스) `2026-05-27`은 KIS 원본에도 그 날짜에 STATIC VI 1건만 있고 근방(±10거래일)에 다른 이벤트가 없음 — `feature_pool`에서 `is_vi_triggered=1`(05-27), `vi_count_recent5d`가 05-27부터 1로 올라가 이벤트가 trailing 5거래일 윈도우 안에 있는 동안(06-02까지) 유지되다 06-04에 0으로 빠짐 — 정확히 trailing-5-거래일 의미론과 일치.
+
+**⚠️재확인**: `build_features.py`는 자기 출력에 없는 기존 컬럼을 "stale"로 간주해 DROP한다(Task 10 fix round 2 설계) — Task 10.5(`features/add_macro_features.py`)가 별도로 추가한 매크로 파생 11개 컬럼(`kospi_ret` 등)이 이 재실행으로 한 차례 삭제되었다가 `add_macro_features.py`를 곧바로 재실행해 즉시 복구함(73개 컬럼, 376,682행 모두 정상 확인). **`build_features.py`를 다시 돌릴 때마다 `add_macro_features.py`도 함께 재실행해야 한다** — 두 스크립트가 서로 독립적인 후처리 단계라 이 순서가 문서화되어 있지 않았던 것 자체가 향후 재발 가능한 위험.
