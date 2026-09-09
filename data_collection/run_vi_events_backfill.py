@@ -15,10 +15,27 @@ Strategy:
    dropped from the sweep, so it is NOT reliable evidence of completeness for that day.
 3. For every capped day, re-verify with per-ticker queries (FID_INPUT_ISCD=<ticker>) for each
    universe ticker in that market — per-ticker queries are NOT capped (verified live: a ticker
-   with 4 real events on 2026-05-27 returned exactly its own 4, not clipped to 30). This closes
-   the gap for exactly the volatile days we most care about (e.g. 2026-05-27). Bounded by
-   MAX_SUPPLEMENTARY_CALLS to avoid unbounded runtime if far more days turn out capped than
-   expected; anything beyond the cap is logged as an explicit, uncorrected limitation.
+   with 4 real events on 2026-05-27 returned exactly its own 4, not clipped to 30). Bounded by
+   MAX_SUPPLEMENTARY_CALLS; anything beyond the cap is logged as an explicit, uncorrected
+   limitation.
+
+   KNOWN LIMITATION (discovered live, 2026-09-09 — this fallback does NOT fully solve the
+   problem by itself): the cap is hit far more often than "rare" — 87% of (market, date) pairs
+   in the full 2019-2026 sweep (3488/4010). This loop processes `capped_days` in chronological
+   order (oldest first, since that's the order the main sweep above discovers them in), so
+   MAX_SUPPLEMENTARY_CALLS is exhausted re-verifying early-2019 days long before it reaches any
+   recent, high-interest window (e.g. the 2026-05-27 leveraged-ETF launch this project cares
+   about most) — confirmed live: only ~41 of 3488 capped pairs got re-verified, all from 2019.
+   If you need trustworthy coverage for a SPECIFIC window regardless of where it falls
+   chronologically, do NOT rely on this fallback alone — run
+   `run_vi_events_targeted_window.py <start_date> <end_date>` for that window afterward (it
+   queries every ticker individually across the window, so it is never capped). This is what
+   was actually done to verify the 2026-05-27 window in the live 2026-09-09 backfill; see
+   `docs/data_units.md`'s "vi_events 데이터 소스 재조사 + 백필" section and
+   `.superpowers/sdd/2026-09-08-ai-model-redesign-plan/backlog-vi-events-report.md` for the
+   full account. Coverage outside any window you've separately re-verified this way still rests
+   on the capped/partially-supplemented main sweep — treat `is_vi_triggered`/`vi_count_recent5d`
+   for pre-2026 dates as a lower-bound signal, not a ground truth.
 
 Environment variables required:
 - STOCK_DB_V2_DSN: PostgreSQL connection string
