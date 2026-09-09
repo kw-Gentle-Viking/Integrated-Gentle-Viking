@@ -26,6 +26,67 @@ MARKET_ID_UNCLASSIFIED = 2
 # data_collection/backfill_sector_id.py SECTOR_NAMES), 20 = unclassified fallback.
 SECTOR_ID_UNCLASSIFIED = 20
 
+# sector_id (0-19) -> sector_daily_ohlcv.sector_code (KIS "0005".."0026" minus 0022/0023),
+# same order as data_collection/run_dart_calendar_sector_backfill.py's SECTOR_CODES and
+# data_collection/backfill_sector_id.py's SECTOR_NAMES (index 0 == "0005"/"음식료·담배", ...,
+# index 19 == "0026"/"일반서비스"). Duplicated here rather than imported: importing
+# run_dart_calendar_sector_backfill pulls in `dart_fss`, which is not installed in the
+# kis_collector conda env this script runs under. Keep in sync with those two files by hand.
+SECTOR_CODES = [
+    "0005", "0006", "0007", "0008", "0009", "0010", "0011", "0012", "0013", "0014",
+    "0015", "0016", "0017", "0018", "0019", "0020", "0021", "0024", "0025", "0026",
+]
+
+# The 6 per-ticker sector-derived features Task 13's training/config.py HISTORICAL_COLS_DEFAULT
+# expects to find in feature_pool (design doc §6.x sector feature spec). Replaces the old
+# 100-column-wide sector_{open,high,low,close,volume}_{code} pivot (Task 10 fix round 2).
+SECTOR_DERIVED_FEATURE_COLS = [
+    "sector_ret_1d", "sector_ret_5d", "sector_ret_20d",
+    "sector_ma_ratio_20d", "sector_volatility", "sector_volume_ratio",
+]
+
+
+def compute_sector_derived_features(sector_df: pd.DataFrame) -> pd.DataFrame:
+    """Compute the 6 SECTOR_DERIVED_FEATURE_COLS per (sector_code, trade_date) from long-format
+    sector_daily_ohlcv rows (columns: sector_code, trade_date, open, high, low, close, volume).
+
+    Pure function, independent of the 200-ticker universe — one row in, one row out per
+    (sector_code, trade_date), computed once over all 20 sectors x ~1887 days and then joined
+    onto the per-ticker feature_pool build via that ticker's sector_id -> sector_code.
+
+    Formulas (design doc §6.x):
+      sector_ret_1d       = close_t / close_{t-1} - 1
+      sector_ret_5d        = close_t / close_{t-5} - 1
+      sector_ret_20d       = close_t / close_{t-20} - 1
+      sector_ma_ratio_20d = close_t / mean(close_{t-19..t})
+      sector_volatility    = (high_t - low_t) / close_t
+      sector_volume_ratio = volume_t / mean(volume_{t-19..t})
+
+    Any gap in a sector's own OHLCV series is forward-filled first (project convention: never
+    drop rows for missing data — see build_features.py module docstring / task brief §"결측치").
+    """
+    df = sector_df.sort_values(['sector_code', 'trade_date']).reset_index(drop=True).copy()
+
+    ohlcv_cols = ['open', 'high', 'low', 'close', 'volume']
+    df[ohlcv_cols] = df.groupby('sector_code')[ohlcv_cols].transform(lambda s: s.ffill())
+
+    close = df.groupby('sector_code')['close']
+    volume = df.groupby('sector_code')['volume']
+
+    df['sector_ret_1d'] = close.transform(lambda s: s / s.shift(1) - 1)
+    df['sector_ret_5d'] = close.transform(lambda s: s / s.shift(5) - 1)
+    df['sector_ret_20d'] = close.transform(lambda s: s / s.shift(20) - 1)
+
+    sector_ma_20d = close.transform(lambda s: s.rolling(window=20, min_periods=1).mean())
+    df['sector_ma_ratio_20d'] = df['close'] / sector_ma_20d
+
+    df['sector_volatility'] = (df['high'] - df['low']) / df['close']
+
+    sector_volume_ma_20d = volume.transform(lambda s: s.rolling(window=20, min_periods=1).mean())
+    df['sector_volume_ratio'] = df['volume'] / (sector_volume_ma_20d + 1e-10)
+
+    return df[['sector_code', 'trade_date'] + SECTOR_DERIVED_FEATURE_COLS]
+
 
 def derive_market_id(is_kospi) -> int:
     """ticker_universe.is_kospi(bool) -> market_id(0/1/2). Pure function, unit-testable."""
@@ -97,7 +158,10 @@ def load_market_index_daily(dsn: str, start_date: str, end_date: str) -> pd.Data
 
 
 def load_sector_daily_ohlcv(dsn: str, start_date: str, end_date: str) -> pd.DataFrame:
-    """Load sector_daily_ohlcv table."""
+    """Load sector_daily_ohlcv table in long format: one row per (sector_code, trade_date).
+    Feeds compute_sector_derived_features(). (Previously pivoted to a 100-column-wide
+    sector_{field}_{code} format that applied every sector's raw OHLCV to every ticker
+    regardless of that ticker's actual sector — removed in Task 10 fix round 2.)"""
     conn = psycopg2.connect(dsn)
     query = """
         SELECT sector_code, trade_date, open, high, low, close, volume
@@ -108,12 +172,7 @@ def load_sector_daily_ohlcv(dsn: str, start_date: str, end_date: str) -> pd.Data
     df = pd.read_sql(query, conn, params=(start_date, end_date))
     conn.close()
     df['trade_date'] = pd.to_datetime(df['trade_date'])
-    # Pivot to get sector codes as columns
-    df_pivot = df.pivot_table(index='trade_date', columns='sector_code',
-                              values=['open', 'high', 'low', 'close', 'volume'], aggfunc='first')
-    df_pivot.columns = [f"sector_{col[0]}_{col[1]}" for col in df_pivot.columns]
-    df_pivot = df_pivot.reset_index()
-    return df_pivot
+    return df
 
 
 def load_calendar(dsn: str, start_date: str, end_date: str) -> pd.DataFrame:
@@ -318,7 +377,7 @@ def calculate_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def merge_features(price_df: pd.DataFrame, market_global_df: pd.DataFrame,
-                   market_index_df: pd.DataFrame, sector_df: pd.DataFrame,
+                   market_index_df: pd.DataFrame, sector_derived_df: pd.DataFrame,
                    calendar_df: pd.DataFrame, market_events_df: pd.DataFrame,
                    stock_events_df: pd.DataFrame, vi_events_df: pd.DataFrame,
                    leverage_daily_df: pd.DataFrame, leverage_products_df: pd.DataFrame,
@@ -334,13 +393,23 @@ def merge_features(price_df: pd.DataFrame, market_global_df: pd.DataFrame,
     # Join market indices
     feature_pool = feature_pool.merge(market_index_df, on='trade_date', how='left')
 
-    # Join sector data (need to get sector_id from ticker_universe first)
-    ticker_to_sector = ticker_universe_df[['ticker', 'sector_id']].drop_duplicates()
+    # Join sector-derived features (need to get sector_id from ticker_universe first, then map
+    # sector_id -> sector_code to join the per-sector derived-feature table on
+    # (sector_code, trade_date) — per-ticker, not all-20-sectors-wide (Task 10 fix round 2).
+    ticker_to_sector = ticker_universe_df[['ticker', 'sector_id']].drop_duplicates().copy()
     feature_pool = feature_pool.merge(ticker_to_sector, on='ticker', how='left')
-    feature_pool = feature_pool.merge(sector_df, on='trade_date', how='left')
     # Any ticker missing a sector_id match (should not happen post-backfill, but defensive
     # for future new tickers) falls back to the documented "unclassified" bucket, not NULL.
     feature_pool['sector_id'] = feature_pool['sector_id'].fillna(SECTOR_ID_UNCLASSIFIED).astype(int)
+
+    sector_id_to_code = dict(enumerate(SECTOR_CODES))
+    feature_pool['sector_code'] = feature_pool['sector_id'].map(sector_id_to_code)
+    feature_pool = feature_pool.merge(sector_derived_df, on=['sector_code', 'trade_date'], how='left')
+    # sector_id == SECTOR_ID_UNCLASSIFIED (20) has no sector_code match (map() -> NaN -> no join
+    # hit) — its 6 derived features end up 0, consistent with how leverage features handle
+    # "doesn't apply yet" elsewhere in this codebase.
+    feature_pool[SECTOR_DERIVED_FEATURE_COLS] = feature_pool[SECTOR_DERIVED_FEATURE_COLS].fillna(0.0)
+    feature_pool = feature_pool.drop(columns=['sector_code'])
 
     # Join market_id (derived from ticker_universe.is_kospi — see derive_market_id())
     ticker_to_market = ticker_universe_df[['ticker', 'is_kospi']].drop_duplicates().copy()
@@ -536,6 +605,12 @@ def build_feature_pool(dsn: str, start_date: str, end_date: str) -> None:
     print("Calculating technical indicators...")
     price_df = calculate_technical_indicators(price_df)
 
+    # Compute per-sector derived features (sector_ret_1d/5d/20d, sector_ma_ratio_20d,
+    # sector_volatility, sector_volume_ratio) once over all 20 sectors x all days — independent
+    # of the 200-ticker universe, joined onto feature_pool per-ticker in merge_features().
+    print("Computing sector-derived features...")
+    sector_derived_df = compute_sector_derived_features(sector_df)
+
     # Aggregate leverage features
     print("Aggregating leverage features...")
     leverage_features_df = aggregate_leverage_features(leverage_daily_df, leverage_products_df, price_df)
@@ -543,7 +618,7 @@ def build_feature_pool(dsn: str, start_date: str, end_date: str) -> None:
     # Merge all features
     print("Merging all features...")
     feature_pool = merge_features(
-        price_df, market_global_df, market_index_df, sector_df,
+        price_df, market_global_df, market_index_df, sector_derived_df,
         calendar_df, market_events_df, stock_events_df, vi_events_df,
         leverage_daily_df, leverage_products_df, ticker_universe_df, labels_df
     )
@@ -616,6 +691,24 @@ def upsert_feature_pool(dsn: str, df: pd.DataFrame) -> None:
 
         for col, col_type in columns_sql:
             cur.execute(f"ALTER TABLE feature_pool ADD COLUMN IF NOT EXISTS {col} {col_type}")
+
+        # Drop any column that exists on the live table but is no longer produced by this
+        # build (e.g. the old 100-column-wide sector_{field}_{code} pivot, replaced by the 6
+        # sector_ret_1d/5d/20d/sector_ma_ratio_20d/sector_volatility/sector_volume_ratio derived
+        # features in Task 10 fix round 2) — a rebuild must fully replace the schema, not just
+        # add to it, so stale columns with stale data don't linger.
+        cur.execute("""
+            SELECT column_name FROM information_schema.columns
+            WHERE table_name = 'feature_pool'
+        """)
+        existing_cols = {row[0] for row in cur.fetchall()}
+        expected_cols = set(df.columns) | {'ticker', 'trade_date'}
+        stale_cols = existing_cols - expected_cols
+        for col in sorted(stale_cols):
+            cur.execute(f"ALTER TABLE feature_pool DROP COLUMN IF EXISTS {col}")
+        if stale_cols:
+            print(f"  Dropped {len(stale_cols)} stale column(s) no longer produced by this build: "
+                  f"{sorted(stale_cols)}")
     conn.commit()
 
     # Replace +/-inf (e.g. divide-by-zero in disparity/volume_ratio) with NULL, and NaN with

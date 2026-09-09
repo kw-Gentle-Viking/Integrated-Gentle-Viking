@@ -1,9 +1,9 @@
 # Feature Pool Validation Report
-Generated: 2026-09-09 00:47:41
+Generated: 2026-09-09 09:27:54
 
 ## Summary
 - feature_pool rows: 376,682
-- Columns: 155
+- Columns: 61
 - Tickers: 200
 - Date range: 2019-01-02 to 2026-09-08
 
