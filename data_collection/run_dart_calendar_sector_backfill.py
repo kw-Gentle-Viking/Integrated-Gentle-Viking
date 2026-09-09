@@ -50,7 +50,26 @@ def load_tickers_from_db(dsn: str) -> list[str]:
 
 def backfill_dart_events(dsn: str, tickers: list[str],
                          start_date: str = "20190102", end_date: str | None = None) -> None:
-    """Backfill stock_events from DART disclosure reports."""
+    """Backfill stock_events from DART disclosure reports.
+
+    2026-09-09 라이브 1차 실행에서 드러난 사실(원래 코드는 한 번도 실제 API에 붙어본 적
+    없었음 — Task 7 당시 DART_API_KEY 미보유로 스킵됨) 3가지를 반영해 재작성:
+      1. `get_corp_code()`는 8자리 corp_code -> stock_code 매핑용 dict가 아니라
+         전체 상장/비상장 법인 리스트(list[dict], 라이브 확인 시 119,039건)를 반환한다.
+         원본 코드는 이걸 매 티커(200회)마다 반복 호출하며 `.items()`를 부르는데,
+         반환형이 list라 `AttributeError`가 나서 매번 즉시 continue — 즉 단 한 건도
+         조회되지 않는 완전한 no-op이었다. 한 번만 받아서 stock_code -> corp_code
+         맵을 만들어 재사용하도록 수정.
+      2. `dart.search(...)`는 dict가 아니라 `SearchResults` 객체를 반환한다
+         (`.get("list", [])`는 애초에 `AttributeError`를 던짐 — "조용히 빈 리스트"가
+         아니라 즉시 예외). `.report_list`(list of `Report`)와 `.total_page`를 쓰도록 수정.
+      3. `page_count=100`으로 첫 페이지만 가져오면 사실상 데이터 유실이다 — 라이브
+         확인 결과 삼성전자(005930) 하나만 2019-01-02~현재 구간에 total_count=4861,
+         total_page=49. 페이지네이션 없이는 200개 티커 전체에서 최대 98% 유실.
+         전체 페이지를 순회하도록 수정.
+    `dart_fss`의 HTTP 세션(`dart_fss.utils.request.Request`)이 요청당 0.2초 딜레이를
+    자체적으로 걸어주므로 여기서 별도 rate limit은 두지 않는다.
+    """
     dart_key = os.environ.get("DART_API_KEY")
     if not dart_key:
         print("WARNING: DART_API_KEY not set, skipping DART backfill")
@@ -58,47 +77,53 @@ def backfill_dart_events(dsn: str, tickers: list[str],
 
     dart.set_api_key(dart_key)
 
+    from dart_fss.api.filings import get_corp_code
+    from dart_fss.errors import NoDataReceived
+
+    print("  Loading DART corp_code list (once)...")
+    corp_list = get_corp_code()
+    stock_to_corp = {c["stock_code"]: c["corp_code"] for c in corp_list if c.get("stock_code")}
+    print(f"  Loaded {len(stock_to_corp)} stock_code -> corp_code mappings ({len(corp_list)} total DART entries)")
+
+    end = end_date or datetime.now().strftime("%Y%m%d")
+
     for i, ticker in enumerate(tickers):
         print(f"  [{i+1}/{len(tickers)}] Fetching DART reports for {ticker}...", end=" ", flush=True)
+
+        corp_code = stock_to_corp.get(ticker)
+        if not corp_code:
+            print("(no corp_code mapping)")
+            continue
+
         try:
-            # Get DART corp_code from ticker (assuming simple mapping)
-            # In real implementation, this would need a ticker-to-corp_code lookup table
-            corp_code = None
-            try:
-                # Try to use dart_fss's built-in ticker lookup
-                from dart_fss.api.filings import get_corp_code
-                corp_list = get_corp_code()
-                for code, info in corp_list.items():
-                    if info.get("stock_code") == ticker:
-                        corp_code = code
-                        break
-            except Exception as lookup_err:
-                print(f"(skipped: {lookup_err.__class__.__name__})")
-                continue
+            all_reports = []
+            page_no = 1
+            total_page = 1
+            while page_no <= total_page:
+                res = dart.search(
+                    corp_code=corp_code,
+                    bgn_de=start_date,
+                    end_de=end,
+                    sort="date",
+                    page_count=100,
+                    page_no=page_no,
+                )
+                total_page = res.total_page
+                all_reports.extend(res.report_list)
+                page_no += 1
 
-            if not corp_code:
-                print("(no corp_code mapping)")
-                continue
-
-            # Search for reports from start_date to end_date
-            end = end_date or datetime.now().strftime("%Y%m%d")
-            reports = dart.search(
-                corp_code=corp_code,
-                bgn_de=start_date,
-                end_de=end,
-                sort="date",
-                page_count=100,
-            ).get("list", [])
-
-            if reports:
-                rows = parse_dart_reports(reports, ticker=ticker)
+            if all_reports:
+                raw = [r.to_dict() for r in all_reports]
+                rows = parse_dart_reports(raw, ticker=ticker)
                 if rows:
                     upsert_stock_events(dsn, rows)
-                    print(f"({len(rows)} events)")
+                    print(f"({len(rows)} events / {len(all_reports)} reports, {page_no - 1} pages)")
                 else:
-                    print("(no matching events)")
+                    print(f"(no matching events / {len(all_reports)} reports)")
             else:
                 print("(no reports)")
+        except NoDataReceived:
+            print("(no reports)")
         except Exception as e:
             print(f"(ERROR: {e})")
 
