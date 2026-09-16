@@ -4,3 +4,8 @@ __pycache__/
 .env
 .worktrees/
 data_collection/.kis_token_cache.json
+features/artifacts/
+training/artifacts/
+training/threshold.json
+training/run_derive_threshold.log
+

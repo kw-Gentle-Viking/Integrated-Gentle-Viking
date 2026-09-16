@@ -56,6 +56,27 @@ def evaluate_loss(model, dataloader, criterion, device) -> float:
     return total_loss / len(dataloader.dataset)
 
 
+def predict(model, dataloader, device) -> tuple[list[int], list[int]]:
+    """Run inference over a dataloader and return (y_true, y_pred) as plain int lists, suitable
+    for evaluation.evaluate.compute_metrics. Added for Task 15 (Stage-1 Optuna/ablation search
+    needs val macro-F1, not just val loss, as its objective) and reusable by Task 16's
+    evaluate_on_test."""
+    model.eval()
+    y_true: list[int] = []
+    y_pred: list[int] = []
+    with torch.no_grad():
+        for batch in dataloader:
+            batch = dict(batch)
+            labels = batch.pop("label")
+            batch = _to_device_batch(batch, device)
+            out = model(batch)
+            logits = out["class_logits"].squeeze(1)
+            preds = logits.argmax(dim=1)
+            y_true.extend(labels.squeeze(-1).tolist())
+            y_pred.extend(preds.cpu().tolist())
+    return y_true, y_pred
+
+
 def run_training(config: dict) -> dict:
     """config keys: tft_config, class_weights, train_loader, val_loader, epochs, lr,
     device, run_name, checkpoint_dir."""
