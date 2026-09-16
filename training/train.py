@@ -88,12 +88,18 @@ def run_training(config: dict) -> dict:
     wandb.init(project="ai-gentle-viking-re", name=config["run_name"], config=config.get("wandb_config", {}))
     best_val_loss = float("inf")
     checkpoint_path = f"{config['checkpoint_dir']}/{config['run_name']}.pt"
-    for epoch in range(config["epochs"]):
-        train_loss = train_one_epoch(model, config["train_loader"], optimizer, criterion, device)
-        val_loss = evaluate_loss(model, config["val_loader"], criterion, device)
-        wandb.log({"epoch": epoch, "train_loss": train_loss, "val_loss": val_loss})
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
-            torch.save(model.state_dict(), checkpoint_path)
-    wandb.finish()
+    try:
+        for epoch in range(config["epochs"]):
+            train_loss = train_one_epoch(model, config["train_loader"], optimizer, criterion, device)
+            val_loss = evaluate_loss(model, config["val_loader"], criterion, device)
+            wandb.log({"epoch": epoch, "train_loss": train_loss, "val_loss": val_loss})
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+                torch.save(model.state_dict(), checkpoint_path)
+    finally:
+        # Without this, an exception mid-loop (e.g. a CUDA OOM a caller catches and recovers
+        # from, as training/run_stage1_search.py's Optuna/ablation loops do across a long
+        # unattended multi-trial run) would leave this trial's wandb run un-finished, causing
+        # wandb state confusion on the next wandb.init() call later in the same process.
+        wandb.finish()
     return {"best_val_loss": best_val_loss, "checkpoint_path": checkpoint_path}

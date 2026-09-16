@@ -223,11 +223,21 @@ def run_optuna_phase(n_trials_target: int, epochs: int, budget: Budget,
     )
     fail_stale_trials(study)  # explicit, not relying solely on the automatic heartbeat sweep
 
-    n_existing = len(study.trials)
-    remaining = max(0, n_trials_target - n_existing)
+    # Count only COMPLETE trials toward the target, not total attempts. n_trials= below is a cap
+    # on how many NEW trials this invocation may start, not a cap on total attempts ever made --
+    # if it counted total attempts, a PRUNED/FAILED trial (e.g. a CUDA OOM at a heavy
+    # hyperparameter combo) would permanently consume one "slot" with nothing to show for it,
+    # and once total attempts reached n_trials_target with any non-COMPLETE among them, no further
+    # trial would ever be scheduled again on any future invocation -- silently stalling the
+    # downstream ablation phase forever (its gate in main() requires n_complete >= n_trials_target,
+    # which could then never be reached). Counting only COMPLETE trials means a pruned/failed
+    # attempt gets backfilled by a fresh one on this or a later invocation instead.
+    n_complete = len([t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE])
+    n_total = len(study.trials)
+    remaining = max(0, n_trials_target - n_complete)
     if remaining == 0:
-        logger.info("Optuna study already has %d/%d trials; skipping search phase.",
-                     n_existing, n_trials_target)
+        logger.info("Optuna study already has %d/%d COMPLETE trials (%d total attempts); "
+                     "skipping search phase.", n_complete, n_trials_target, n_total)
         return study
 
     timeout = budget.remaining_seconds()
@@ -235,8 +245,8 @@ def run_optuna_phase(n_trials_target: int, epochs: int, budget: Budget,
         logger.info("Time budget already exhausted before starting the Optuna phase.")
         return study
 
-    logger.info("Running up to %d more Optuna trial(s) (existing=%d/%d), timeout=%s",
-                remaining, n_existing, n_trials_target, timeout)
+    logger.info("Running up to %d more Optuna trial(s) (complete=%d/%d, %d total attempts so "
+                "far), timeout=%s", remaining, n_complete, n_trials_target, n_total, timeout)
     # catch=(Exception,): an unanticipated bug in one trial must not kill a many-hour unattended
     # search. KeyboardInterrupt/SIGTERM are BaseException, not Exception, so a deliberate kill
     # (e.g. the kill-and-resume validation) still stops the process immediately.
