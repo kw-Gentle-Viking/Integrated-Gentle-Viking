@@ -8,4 +8,5 @@ features/artifacts/
 training/artifacts/
 training/threshold.json
 training/run_derive_threshold.log
+wandb/
 
