@@ -2,13 +2,8 @@ import torch
 
 from evaluation.evaluate import compute_metrics, split_by_regime
 from training.config import KNOWN_FUTURE_COLS, build_tft_config
+from training.run_stage1_search import STATIC_CARDINALITIES
 from training.train import TemporalFusionTransformer, predict
-
-# Matches training/run_stage1_search.py's STATIC_CARDINALITIES exactly (sector_id 0-20 incl.
-# SECTOR_ID_UNCLASSIFIED=20, market_id 0-1) -- Task 15's live search never varied this, so it is
-# a fixed constant here too, not something the ablation loader needs to parse out of
-# docs/model_versions.md.
-STATIC_CARDINALITIES = [21, 3]
 
 
 def select_champion(versions: list[dict]) -> dict:

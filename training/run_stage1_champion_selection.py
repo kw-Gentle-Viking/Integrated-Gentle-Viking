@@ -27,6 +27,7 @@ from torch.utils.data import DataLoader
 
 from training.config import HISTORICAL_COLS_DEFAULT, KNOWN_FUTURE_COLS, STATIC_COLS
 from training.dataset import TickerDayDataset
+from training.run_stage1_search import LEVERAGE_FEATURES
 from training.select_stage1_champion import evaluate_on_test, select_champion
 from training.stage1_data import load_or_build_ticker_dfs
 
@@ -41,12 +42,6 @@ CHAMPION_CONFIG_PATH = "training/champion_config.json"
 TEST_START, TEST_END = "2025-01-01", "2025-12-31"
 ENCODER_LEN = 60
 BATCH_SIZE = 128
-
-# Matches training/run_stage1_search.py's LEVERAGE_FEATURES exactly.
-LEVERAGE_FEATURES = [
-    "lev_total_volume", "lev_total_aum", "lev_aum_to_mktcap",
-    "est_rebalancing_flow", "is_vi_triggered", "vi_count_recent5d",
-]
 
 # One row of docs/model_versions.md, e.g.:
 # | stage1-remove_lev_total_volume | 1단계-ablation | 레버리지 피처 제거: lev_total_volume (나머지 5개 포함) | state_size=32, attention_heads=8, lstm_layers=2, dropout=0.16577574724588015, lr=0.0002905890080008017 | 0.3823 |  | epochs=10, val_loss=1.0908 |
@@ -201,6 +196,27 @@ def main(argv=None) -> None:
     champion = select_champion(versions)
     logger.info("Champion selected: %s (macro_f1_val=%.4f, %d historical columns)",
                 champion["version"], champion["macro_f1_val"], len(champion["columns"]))
+
+    # Refuse to touch the test set at all if this version's row already has a test F1 recorded --
+    # update_test_f1_in_model_versions() below also refuses to overwrite it, but that check alone
+    # only protects the written record, not the real evaluation itself: a second accidental
+    # invocation of this script would still rebuild the test set and re-run evaluate_on_test()
+    # before ever reaching that guard. The whole point of a held-out test set is that it's used
+    # exactly once, so the check has to happen before build_test_dataset()/evaluate_on_test(),
+    # not just before the file write.
+    with open(MODEL_VERSIONS_PATH) as f:
+        existing_row = next((ln for ln in f if ln.startswith(f"| {champion['version']} |")), None)
+    if existing_row is not None:
+        m = ROW_RE.match(existing_row.rstrip("\n"))
+        if m and m.group("f1_test").strip():
+            raise RuntimeError(
+                f"{champion['version']!r} already has a recorded test F1 "
+                f"({m.group('f1_test').strip()!r}) -- refusing to re-run evaluate_on_test() "
+                f"against the real 2025 test set a second time. The test set must be touched "
+                f"exactly once; if you genuinely need to redo this (e.g. a bug fix upstream), "
+                f"that is a deliberate decision a human should make explicitly, not something "
+                f"this script should do silently on a routine re-invocation."
+            )
 
     checkpoint_path = f"{CHECKPOINT_DIR}/stage1-ablation-{champion['version'][len('stage1-'):]}.pt"
     if not os.path.exists(checkpoint_path):
