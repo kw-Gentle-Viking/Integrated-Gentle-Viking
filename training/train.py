@@ -1,3 +1,4 @@
+import os
 import sys
 import torch
 import torch.nn.functional as F
@@ -77,25 +78,62 @@ def predict(model, dataloader, device) -> tuple[list[int], list[int]]:
     return y_true, y_pred
 
 
+def resume_epoch_and_best_loss(checkpoint_state: dict | None) -> tuple[int, float]:
+    """Pure decision logic (no I/O): given a loaded epoch-level checkpoint dict (or None if no
+    such checkpoint exists yet), return (start_epoch, best_val_loss) to resume training from.
+    Extracted as its own function so the resume decision is unit-testable with plain dicts --
+    without a real model/optimizer/torch.load call (see training/test_train.py). The actual
+    torch.load(...) / model.load_state_dict(...) / optimizer.load_state_dict(...) calls stay in
+    run_training, which is the part that genuinely needs a live model+optimizer and isn't worth
+    unit-testing (same split this project already uses elsewhere, e.g. training/ablation.py's
+    pure run_ablation vs. training/run_stage1_search.py's live orchestration)."""
+    if checkpoint_state is None:
+        return 0, float("inf")
+    return checkpoint_state["epoch"] + 1, checkpoint_state["best_val_loss"]
+
+
 def run_training(config: dict) -> dict:
     """config keys: tft_config, class_weights, train_loader, val_loader, epochs, lr,
-    device, run_name, checkpoint_dir."""
+    device, run_name, checkpoint_dir. Optional: epoch_checkpoint_path -- Task 17 Step 5 addition
+    for a single long (~1.4-2.8h) training run that should survive being interrupted by shared-GPU
+    contention without restarting from epoch 0 (simpler than Task 15's Optuna/SQLite-style
+    resumability, since this is one run, not a multi-trial search). When set, an epoch-level
+    checkpoint (model/optimizer state + epoch number + best_val_loss so far) is saved after every
+    epoch; if that file already exists when run_training starts, training resumes from the next
+    epoch instead of epoch 0. Omitting this key (the default) reproduces the exact prior
+    behavior -- always starts at epoch 0, never writes an epoch-level checkpoint -- so existing
+    callers (training/run_stage1_search.py's train_and_score) are unaffected."""
     device = config["device"]
     model = TemporalFusionTransformer(config["tft_config"]).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=config["lr"])
     criterion = torch.nn.CrossEntropyLoss(weight=config["class_weights"].to(device))
 
+    epoch_checkpoint_path = config.get("epoch_checkpoint_path")
+    checkpoint_state = None
+    if epoch_checkpoint_path and os.path.exists(epoch_checkpoint_path):
+        checkpoint_state = torch.load(epoch_checkpoint_path, map_location=device)
+        model.load_state_dict(checkpoint_state["model_state_dict"])
+        optimizer.load_state_dict(checkpoint_state["optimizer_state_dict"])
+    start_epoch, best_val_loss = resume_epoch_and_best_loss(checkpoint_state)
+    if start_epoch > 0:
+        print(f"[run_training] resuming {config['run_name']} from epoch {start_epoch} "
+              f"(best_val_loss so far={best_val_loss:.4f})")
+
     wandb.init(project="ai-gentle-viking-re", name=config["run_name"], config=config.get("wandb_config", {}))
-    best_val_loss = float("inf")
     checkpoint_path = f"{config['checkpoint_dir']}/{config['run_name']}.pt"
     try:
-        for epoch in range(config["epochs"]):
+        for epoch in range(start_epoch, config["epochs"]):
             train_loss = train_one_epoch(model, config["train_loader"], optimizer, criterion, device)
             val_loss = evaluate_loss(model, config["val_loader"], criterion, device)
             wandb.log({"epoch": epoch, "train_loss": train_loss, "val_loss": val_loss})
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
                 torch.save(model.state_dict(), checkpoint_path)
+            if epoch_checkpoint_path:
+                torch.save({
+                    "epoch": epoch, "model_state_dict": model.state_dict(),
+                    "optimizer_state_dict": optimizer.state_dict(), "best_val_loss": best_val_loss,
+                }, epoch_checkpoint_path)
     finally:
         # Without this, an exception mid-loop (e.g. a CUDA OOM a caller catches and recovers
         # from, as training/run_stage1_search.py's Optuna/ablation loops do across a long
