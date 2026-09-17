@@ -1,7 +1,6 @@
 import torch
 import torch.nn.functional as F
 import pandas as pd
-from training.dataset import build_incomplete_today_bar
 
 LABEL_MAP = {0: "매수", 1: "관망", 2: "매도"}
 
@@ -15,22 +14,28 @@ def softmax_probs(logits: torch.Tensor) -> dict:
     }
 
 
-def run_inference(ticker: str, encoder_df: pd.DataFrame, today_intraday_rows: list[dict],
-                   model, historical_cols: list[str], future_cols: list[str],
+def run_inference(ticker: str, encoder_df: pd.DataFrame, model,
+                   historical_cols: list[str], future_cols: list[str],
                    static_cols: list[str]) -> dict:
-    """encoder_df: 과거 59거래일(오늘 제외) 일봉 피처. 오늘 행은 today_intraday_rows로부터
-    미완성 일봉으로 계산해 encoder 마지막(60번째) 행으로 붙인다 (설계 §3)."""
-    open_price = encoder_df.iloc[-1]["close"] if len(encoder_df) and "close" in encoder_df.columns else 0
-    today_bar = build_incomplete_today_bar(today_intraday_rows, open_price=open_price)
-    today_row = encoder_df.iloc[-1].copy()
-    for k in ["open", "high", "low", "close", "volume"]:
-        if k in today_row.index:
-            today_row[k] = today_bar[k]
-    full_encoder = pd.concat([encoder_df, today_row.to_frame().T], ignore_index=True)
+    """Forward pass + softmax only.
 
-    hist = torch.tensor(full_encoder[historical_cols].values.astype("float32")).unsqueeze(0)
-    fut = torch.tensor(full_encoder[future_cols].iloc[[-1]].values.astype("float32")).unsqueeze(0)
-    static = torch.tensor(full_encoder[static_cols].iloc[[-1]].values.astype("int64")).unsqueeze(0)
+    Task 18 Step 5: this used to also guess today's opening price (silently defaulting to 0 --
+    see feature_builder.py's docstring for why that was a real bug) and try to fold today's live
+    intraday bar into encoder_df itself (a no-op against the real, engineered column set).
+    `encoder_df` must now already be a COMPLETE, correct 60-row frame (59 real trading days +
+    1 assembled "today" row) -- that is entirely serving.feature_builder's job
+    (build_encoder_df / build_encoder_df_for_ticker), not this function's.
+    """
+    hist = torch.tensor(encoder_df[historical_cols].values.astype("float32")).unsqueeze(0)
+    fut = torch.tensor(encoder_df[future_cols].iloc[[-1]].values.astype("float32")).unsqueeze(0)
+    # NOTE: static must stay 2D [batch, num_static], NOT [batch, 1, num_static] -- tft-torch's
+    # static input channel is not time-distributed (see training/train.py's _to_device_batch,
+    # which squeezes the same singleton dim off the training batch before calling the model).
+    # `.iloc[[-1]].values` already has shape (1, num_static) -- that IS the batch-of-1 shape, so
+    # no extra unsqueeze here (unlike hist/fut, which start 2D per-sample and need a batch dim
+    # added). Caught live during this task's real-model smoke test (a bug the Steps 1-4 FakeModel
+    # unit test couldn't catch, since it doesn't touch tft-torch's static embedding layer).
+    static = torch.tensor(encoder_df[static_cols].iloc[[-1]].values.astype("int64"))
 
     model.eval()
     with torch.no_grad():

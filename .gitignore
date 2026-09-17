@@ -9,4 +9,6 @@ training/artifacts/
 training/threshold.json
 training/run_derive_threshold.log
 wandb/
+serving/active_tickers.json
+serving/*.log
 
