@@ -124,3 +124,24 @@ def compute_class_weights(label_counts: dict[int, int]) -> torch.Tensor:
     n_classes = len(label_counts)
     weights = [total / (n_classes * label_counts[c]) for c in sorted(label_counts)]
     return torch.tensor(weights, dtype=torch.float32)
+
+
+def compute_uniform_class_weights(label_counts: dict[int, int]) -> torch.Tensor:
+    """Always [1.0, 1.0, 1.0], regardless of label_counts -- the "no correction at all" scheme,
+    for the classweight-sweep experiment (see docs/model_versions.md's Stage-2 buy-skew note and
+    the classweight-sweep plan doc). Still takes label_counts as a parameter, unused, for
+    interface consistency with compute_class_weights/compute_mild_class_weights and to make its
+    independence from label_counts explicit and directly testable."""
+    del label_counts  # deliberately unused -- see docstring
+    return torch.tensor([1.0, 1.0, 1.0], dtype=torch.float32)
+
+
+def compute_mild_class_weights(label_counts: dict[int, int]) -> torch.Tensor:
+    """Geometric mean between uniform (1.0) and compute_class_weights' full-balanced weight, per
+    class: mild_weight_c = sqrt(balanced_weight_c). A dampened middle ground between "no
+    correction" (compute_uniform_class_weights) and "full inverse-frequency correction"
+    (compute_class_weights), which the classweight-sweep experiment suspects may have overshot
+    into over-predicting the down-weighted majority class's complement (buy-skew bug). Calls
+    compute_class_weights internally rather than duplicating the balanced-weight formula."""
+    balanced = compute_class_weights(label_counts)
+    return torch.sqrt(balanced)
