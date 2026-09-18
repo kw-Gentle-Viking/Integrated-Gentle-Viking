@@ -103,10 +103,11 @@ LIVE_COLS = [
 ZERO_DEFAULT_COLS = [
     "is_dividend", "is_bonus_issue", "is_rights_offering", "is_split", "is_vi_triggered",
 ]
-# Anything else in a caller's historical_cols list is treated as ffill by default -- this makes
-# the module tolerant of the exact 33-column champion list changing slightly in the future
-# without silently dropping a column; FFILL_COLS below fixes the *currently known* set for the
-# `test_column_policy_partition_covers_all_historical_cols_with_no_overlap` pin.
+# A column must be explicitly listed in exactly one of LIVE_COLS / ZERO_DEFAULT_COLS /
+# FFILL_COLS to be served -- _make_today_row() raises ValueError for anything unclassified,
+# rather than silently defaulting a future champion-column-list change to ffill without review
+# (see 2026-09-18 review finding: the old unconditional "else -> ffill" branch would have let
+# an unreviewed new column through silently).
 FFILL_COLS = [
     "sector_ret_1d", "sector_ret_5d", "sector_ret_20d", "sector_ma_ratio_20d",
     "sector_volatility", "sector_volume_ratio",
@@ -214,8 +215,20 @@ def build_encoder_df(
                 row[col] = live_values[col]
             elif col in ZERO_DEFAULT_COLS:
                 row[col] = 0.0
+            elif col in FFILL_COLS:
+                row[col] = float(last_row.get(col) or 0.0)
             else:
-                row[col] = float(last_row.get(col) or 0.0)  # ffill
+                # Not classified into any of the three policies -- e.g. a future champion
+                # feature-set change adds a column nobody has reviewed yet for whether ffill
+                # is actually the right default for it. Silently ffilling here (as the old
+                # unconditional "else" branch did) would let it happen by accident rather than
+                # by a reviewed decision. Fail loudly instead.
+                raise ValueError(
+                    f"build_encoder_df: historical column {col!r} is not classified into "
+                    f"LIVE_COLS, ZERO_DEFAULT_COLS, or FFILL_COLS in serving/feature_builder.py "
+                    f"-- add it to the appropriate list (with a reasoned policy, see module "
+                    f"docstring) before it can be served."
+                )
         for col in future_cols:
             if col == "time_progress":
                 row[col] = compute_time_progress(now)
@@ -311,6 +324,16 @@ def build_encoder_df_for_ticker(
     history_rows = fetch_feature_pool_history(v2_dsn, ticker, historical_cols, static_cols, n_days=n_days)
     if not history_rows:
         raise ValueError(f"no feature_pool history found for ticker={ticker!r}")
+    if len(history_rows) < n_days:
+        # A short history (e.g. a newly-listed ticker) would silently produce a shorter-than-
+        # expected encoder_df -- tft-torch's LSTM-based encoder doesn't error on a short
+        # sequence, so this would otherwise surface as a plausible-looking but out-of-
+        # distribution prediction rather than a loud failure (2026-09-18 review finding).
+        raise ValueError(
+            f"build_encoder_df_for_ticker: only {len(history_rows)}/{n_days} real trading-day "
+            f"rows found in feature_pool for ticker={ticker!r} -- too little history to serve "
+            f"a reliable prediction (e.g. a newly-listed ticker)."
+        )
     today_intraday_rows = fetch_today_intraday_rows(prod_dsn, ticker, now.date())
     return build_encoder_df(ticker, history_rows, today_intraday_rows, now,
                              historical_cols, future_cols, static_cols)

@@ -181,3 +181,32 @@ def test_column_policy_partition_covers_all_historical_cols_with_no_overlap():
     # every champion historical column must be classified into exactly one bucket
     for col in HISTORICAL_COLS:
         assert col in LIVE_COLS or col in ZERO_DEFAULT_COLS or col in ffill_expected
+
+
+def test_unclassified_historical_column_raises_instead_of_silently_ffilling():
+    # 2026-09-18 review finding: an unreviewed future champion-column-list addition must fail
+    # loudly, not silently fall through to ffill via an unconditional "else" branch.
+    history = _make_history_rows(59)
+    for row in history:
+        row["totally_new_unclassified_column"] = 1.0
+    with pytest.raises(ValueError, match="not classified"):
+        build_encoder_df(
+            "005930", history, [], datetime(2026, 9, 9, 9, 10),
+            HISTORICAL_COLS + ["totally_new_unclassified_column"], FUTURE_COLS, STATIC_COLS,
+        )
+
+
+def test_build_encoder_df_for_ticker_raises_on_insufficient_history(monkeypatch):
+    # 2026-09-18 review finding: a newly-listed ticker with too little real history must fail
+    # loudly rather than silently producing a shorter-than-expected encoder_df.
+    import serving.feature_builder as fb
+
+    short_history = _make_history_rows(10)  # far short of the requested 59
+    monkeypatch.setattr(fb, "fetch_feature_pool_history", lambda *a, **k: short_history)
+    monkeypatch.setattr(fb, "fetch_today_intraday_rows", lambda *a, **k: [])
+    with pytest.raises(ValueError, match=r"10/59"):
+        fb.build_encoder_df_for_ticker(
+            "005930", "dummy_v2_dsn", "dummy_prod_dsn",
+            HISTORICAL_COLS, FUTURE_COLS, STATIC_COLS,
+            now=datetime(2026, 9, 9, 9, 10), n_days=59,
+        )
