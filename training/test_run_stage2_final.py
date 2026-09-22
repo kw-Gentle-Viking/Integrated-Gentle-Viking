@@ -60,3 +60,83 @@ def test_split_held_out_raises_when_too_few_trading_days():
     ticker_dfs = {"A": _make_ticker_df([f"2024-01-{d:02d}" for d in range(1, 4)])}
     with pytest.raises(ValueError, match="only 3 distinct trade_dates"):
         split_held_out_by_trading_days(ticker_dfs, n_held_out_days=100, encoder_len=60)
+
+
+# --- classweight-sweep follow-up: scheme-aware run names and gated serving promotion ---
+
+from training.run_stage2_final import (  # noqa: E402
+    DEFAULT_WEIGHT_SCHEME,
+    promote_to_serving,
+    promotion_plan,
+    stage2_run_name,
+)
+
+
+def test_run_name_unchanged_for_default_balanced_scheme():
+    # Must stay identical to build_stage2_config's run_name so the existing
+    # stage2-final-stage1-remove_lev_total_volume row/checkpoint keep working.
+    assert DEFAULT_WEIGHT_SCHEME == "balanced"
+    assert stage2_run_name("stage2-final-v2", "balanced") == "stage2-final-v2"
+
+
+def test_run_name_gets_scheme_suffix_for_non_default_schemes():
+    assert stage2_run_name("stage2-final-v2", "uniform") == "stage2-final-v2-classweight-uniform"
+    assert stage2_run_name("stage2-final-v2", "mild") == "stage2-final-v2-classweight-mild"
+    assert stage2_run_name("stage2-final-v2", "mild") != stage2_run_name("stage2-final-v2", "balanced")
+
+
+def test_promotion_plan_default_scheme_keeps_legacy_auto_copy_without_backup():
+    assert promotion_plan("balanced", promote_flag=False) == {"promote": True, "backup": False}
+
+
+def test_promotion_plan_non_default_scheme_never_promotes_without_flag():
+    assert promotion_plan("uniform", promote_flag=False) == {"promote": False, "backup": False}
+    assert promotion_plan("mild", promote_flag=False) == {"promote": False, "backup": False}
+
+
+def test_promotion_plan_non_default_scheme_with_flag_promotes_and_backs_up():
+    assert promotion_plan("mild", promote_flag=True) == {"promote": True, "backup": True}
+
+
+def test_promote_to_serving_backs_up_old_checkpoint_then_overwrites(tmp_path):
+    src = tmp_path / "new.pt"
+    serving = tmp_path / "best_model_state_dict.pt"
+    backup = tmp_path / "best_model_state_dict.pt.stage2-balanced-backup"
+    src.write_bytes(b"NEW")
+    serving.write_bytes(b"OLD")
+
+    promote_to_serving(str(src), str(serving), str(backup), backup=True)
+
+    assert serving.read_bytes() == b"NEW"
+    assert backup.read_bytes() == b"OLD"
+
+
+def test_promote_to_serving_never_clobbers_an_existing_backup(tmp_path):
+    """A second promotion must not overwrite the original balanced backup with the previously
+    promoted model -- the backup name promises the balanced model."""
+    src = tmp_path / "new.pt"
+    serving = tmp_path / "best_model_state_dict.pt"
+    backup = tmp_path / "best_model_state_dict.pt.stage2-balanced-backup"
+    src.write_bytes(b"NEW2")
+    serving.write_bytes(b"PROMOTED1")
+    backup.write_bytes(b"ORIGINAL_BALANCED")
+
+    promote_to_serving(str(src), str(serving), str(backup), backup=True)
+
+    assert backup.read_bytes() == b"ORIGINAL_BALANCED"
+    assert serving.read_bytes() == b"NEW2"
+    extra = [p for p in tmp_path.iterdir() if p.name.startswith("best_model_state_dict.pt.pre-promote-")]
+    assert len(extra) == 1 and extra[0].read_bytes() == b"PROMOTED1"
+
+
+def test_promote_to_serving_without_backup_flag_just_copies(tmp_path):
+    src = tmp_path / "new.pt"
+    serving = tmp_path / "s.pt"
+    backup = tmp_path / "s.pt.bak"
+    src.write_bytes(b"NEW")
+    serving.write_bytes(b"OLD")
+
+    promote_to_serving(str(src), str(serving), str(backup), backup=False)
+
+    assert serving.read_bytes() == b"NEW"
+    assert not backup.exists()

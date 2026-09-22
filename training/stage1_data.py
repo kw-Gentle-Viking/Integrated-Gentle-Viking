@@ -145,3 +145,13 @@ def compute_mild_class_weights(label_counts: dict[int, int]) -> torch.Tensor:
     compute_class_weights internally rather than duplicating the balanced-weight formula."""
     balanced = compute_class_weights(label_counts)
     return torch.sqrt(balanced)
+
+
+# Name -> weight-function registry for the classweight-sweep experiment and
+# run_stage2_final_live.py's --weight-scheme flag, so both share one source of truth for the
+# scheme name <-> function mapping instead of duplicating a dict in each caller.
+WEIGHT_SCHEMES = {
+    "balanced": compute_class_weights,
+    "uniform": compute_uniform_class_weights,
+    "mild": compute_mild_class_weights,
+}

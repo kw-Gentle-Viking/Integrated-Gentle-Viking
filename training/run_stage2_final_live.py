@@ -36,7 +36,6 @@ import argparse
 import json
 import logging
 import os
-import shutil
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -54,8 +53,14 @@ from training.run_stage1_search import (
     append_model_version_row,
     ensure_model_versions_header,
 )
-from training.run_stage2_final import build_stage2_config, split_held_out_by_trading_days
-from training.stage1_data import compute_class_weights, compute_label_distribution, load_or_build_ticker_dfs
+from training.run_stage2_final import (
+    build_stage2_config,
+    promote_to_serving,
+    promotion_plan,
+    split_held_out_by_trading_days,
+    stage2_run_name,
+)
+from training.stage1_data import WEIGHT_SCHEMES, compute_label_distribution, load_or_build_ticker_dfs
 from training.train import TemporalFusionTransformer, predict, run_training
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -67,6 +72,7 @@ MODEL_VERSIONS_PATH = "docs/model_versions.md"
 CHAMPION_CONFIG_PATH = "training/champion_config.json"
 SERVING_DIR = "serving"
 SERVING_CHECKPOINT_PATH = f"{SERVING_DIR}/best_model_state_dict.pt"
+SERVING_BACKUP_PATH = f"{SERVING_CHECKPOINT_PATH}.stage2-balanced-backup"
 
 ENCODER_LEN = 60
 BATCH_SIZE = 128
@@ -110,6 +116,16 @@ def parse_args(argv=None) -> argparse.Namespace:
                          "2019-2023-only train split; this is the final deployed model trained on "
                          "~1.53x more data (full 2019-present range), so somewhat more epochs is "
                          "reasonable.")
+    p.add_argument("--weight-scheme", choices=sorted(WEIGHT_SCHEMES), default="balanced",
+                    help="Class-weight scheme (classweight-sweep follow-up). 'balanced' (default) "
+                         "reproduces the original Task 17 behavior exactly, including auto-promotion "
+                         "to serving/. Any other scheme gets a distinct run_name/checkpoint and is "
+                         "never auto-promoted -- see --promote-to-serving.")
+    p.add_argument("--promote-to-serving", action="store_true", default=False,
+                    help="Only relevant for a non-default --weight-scheme: explicitly opt in to "
+                         "overwriting serving/best_model_state_dict.pt with this run's checkpoint "
+                         "(the current serving checkpoint is backed up first). Off by default so a "
+                         "sweep-winner retrain never silently replaces the deployed model.")
     return p.parse_args(argv)
 
 
@@ -131,8 +147,9 @@ def main(argv=None) -> None:
     logger.info("Live feature_pool max trade_date (today)=%s", today)
 
     cfg = build_stage2_config(champion, today)
-    logger.info("Stage-2 config: train_start=%s train_end=%s run_name=%s",
-                cfg["train_start"], cfg["train_end"], cfg["run_name"])
+    cfg["run_name"] = stage2_run_name(cfg["run_name"], args.weight_scheme)
+    logger.info("Stage-2 config: train_start=%s train_end=%s run_name=%s weight_scheme=%s",
+                cfg["train_start"], cfg["train_end"], cfg["run_name"], args.weight_scheme)
 
     if _model_versions_has_row(cfg["run_name"]):
         logger.warning("%s already has a row for %r in %s -- skipping to avoid a duplicate row. "
@@ -161,9 +178,9 @@ def main(argv=None) -> None:
     # full-range class balance may differ from Stage 1's 2019-2023-only balance, so this is
     # computed fresh rather than reused from champion_config.json.
     label_counts = compute_label_distribution(train_ds)
-    class_weights = compute_class_weights(label_counts)
-    logger.info("train (excl. held-out) label distribution=%s -> class_weights=%s",
-                label_counts, class_weights.tolist())
+    class_weights = WEIGHT_SCHEMES[args.weight_scheme](label_counts)
+    logger.info("train (excl. held-out) label distribution=%s -> weight_scheme=%s class_weights=%s",
+                label_counts, args.weight_scheme, class_weights.tolist())
 
     train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True)
     held_out_loader = DataLoader(held_out_ds, batch_size=BATCH_SIZE, shuffle=False)
@@ -212,9 +229,18 @@ def main(argv=None) -> None:
     logger.info("Per-class: %s", metrics["per_class"])
     logger.info("Confusion matrix: %s", metrics["confusion_matrix"])
 
-    os.makedirs(SERVING_DIR, exist_ok=True)
-    shutil.copyfile(result["checkpoint_path"], SERVING_CHECKPOINT_PATH)
-    logger.info("Copied best checkpoint to %s", SERVING_CHECKPOINT_PATH)
+    plan = promotion_plan(args.weight_scheme, args.promote_to_serving)
+    if plan["promote"]:
+        os.makedirs(SERVING_DIR, exist_ok=True)
+        promote_to_serving(result["checkpoint_path"], SERVING_CHECKPOINT_PATH,
+                            SERVING_BACKUP_PATH, backup=plan["backup"])
+        logger.info("Promoted checkpoint to %s (backup=%s)", SERVING_CHECKPOINT_PATH, plan["backup"])
+    else:
+        logger.info("weight_scheme=%s, --promote-to-serving not set -- NOT touching %s. "
+                     "Checkpoint is at %s; re-run with --weight-scheme %s --promote-to-serving "
+                     "to promote it after reviewing results.",
+                     args.weight_scheme, SERVING_CHECKPOINT_PATH, result["checkpoint_path"],
+                     args.weight_scheme)
 
     ensure_model_versions_header()
     hparams = {

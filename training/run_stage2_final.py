@@ -1,4 +1,14 @@
+import os
+import shutil
+import time
+
 import pandas as pd
+
+# classweight-sweep follow-up (Section 5 of the plan doc): Stage-2 retrain-if-winner support.
+# Kept in this module (not run_stage2_final_live.py) so it's importable/unit-testable without
+# torch/psycopg2 -- mirrors how build_stage2_config/split_held_out_by_trading_days are already
+# pure-logic helpers separated from the live script's DB/GPU orchestration.
+DEFAULT_WEIGHT_SCHEME = "balanced"
 
 
 def build_stage2_config(champion: dict, today: str) -> dict:
@@ -9,6 +19,52 @@ def build_stage2_config(champion: dict, today: str) -> dict:
         "lstm_layers": champion["lstm_layers"], "dropout": champion["dropout"],
         "run_name": f"stage2-final-{champion['version']}",
     }
+
+
+def stage2_run_name(base_run_name: str, weight_scheme: str) -> str:
+    """Suffix the base run_name (from build_stage2_config) with the weight scheme, UNLESS it's
+    the default 'balanced' scheme -- that must reproduce the existing
+    'stage2-final-stage1-remove_lev_total_volume' run_name bit-for-bit so its duplicate-run guard
+    (_model_versions_has_row) and checkpoint filename keep matching the Task 17 row/checkpoint
+    that already exists."""
+    if weight_scheme == DEFAULT_WEIGHT_SCHEME:
+        return base_run_name
+    return f"{base_run_name}-classweight-{weight_scheme}"
+
+
+def promotion_plan(weight_scheme: str, promote_flag: bool) -> dict:
+    """Decide whether a Stage-2 run should overwrite serving/best_model_state_dict.pt, and
+    whether a backup of the current serving checkpoint should be taken first. Pure decision
+    logic, no I/O -- see promote_to_serving() for the actual file operations.
+
+    - Default scheme ('balanced'), no flag needed: behaves exactly like the pre-existing script
+      (Task 17) -- always copies to serving, no backup (this IS the currently-deployed scheme;
+      there is nothing new to protect against).
+    - Any non-default scheme: NEVER promotes unless --promote-to-serving is explicitly passed
+      (a fresh non-balanced checkpoint must not silently replace the deployed model). When it
+      does promote, a backup is always taken first.
+    """
+    if weight_scheme == DEFAULT_WEIGHT_SCHEME:
+        return {"promote": True, "backup": False}
+    return {"promote": promote_flag, "backup": promote_flag}
+
+
+def promote_to_serving(checkpoint_path: str, serving_path: str, backup_path: str,
+                        backup: bool) -> None:
+    """Copy `checkpoint_path` to `serving_path`, optionally backing up whatever is currently at
+    `serving_path` first. The backup name (`best_model_state_dict.pt.stage2-balanced-backup`)
+    promises "the balanced model" -- so if it already exists, this does NOT overwrite it (that
+    would silently lose the original balanced checkpoint on a second promotion); instead the
+    checkpoint about to be replaced is saved under a timestamped
+    '<serving_basename>.pre-promote-<ts>' sidecar so nothing is ever lost."""
+    if backup and os.path.exists(serving_path):
+        if os.path.exists(backup_path):
+            ts = time.strftime("%Y%m%d-%H%M%S")
+            fallback_backup = f"{serving_path}.pre-promote-{ts}"
+            shutil.copyfile(serving_path, fallback_backup)
+        else:
+            shutil.copyfile(serving_path, backup_path)
+    shutil.copyfile(checkpoint_path, serving_path)
 
 
 def split_held_out_by_trading_days(ticker_dfs: dict, n_held_out_days: int,

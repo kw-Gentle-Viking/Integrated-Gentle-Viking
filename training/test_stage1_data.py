@@ -53,3 +53,12 @@ def test_mild_class_weights_returns_float_tensor():
     weights = compute_mild_class_weights({0: 10, 1: 20, 2: 30})
     assert isinstance(weights, torch.Tensor)
     assert weights.dtype == torch.float32
+
+
+def test_weight_schemes_registry_maps_names_to_the_three_functions():
+    from training.stage1_data import WEIGHT_SCHEMES
+
+    assert set(WEIGHT_SCHEMES) == {"balanced", "uniform", "mild"}
+    assert WEIGHT_SCHEMES["balanced"] is compute_class_weights
+    assert WEIGHT_SCHEMES["uniform"] is compute_uniform_class_weights
+    assert WEIGHT_SCHEMES["mild"] is compute_mild_class_weights
