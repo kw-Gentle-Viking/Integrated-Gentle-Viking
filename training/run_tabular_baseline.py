@@ -23,6 +23,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import numpy as np
 import pandas as pd
 
+from training.tabular_features import argmax_nan_safe
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
@@ -187,7 +189,7 @@ def select_hgb_iters(make, Xtr, ytr, Xsel, sel_dates, sel_ret, score_fn):
 def main():
     from sklearn.ensemble import HistGradientBoostingClassifier, HistGradientBoostingRegressor
     from sklearn.linear_model import Ridge
-    from training.tabular_features import Preprocessor, argmax_nan_safe, demean_by_date, make_z_target
+    from training.tabular_features import Preprocessor, demean_by_date, make_z_target
 
     dsn = os.environ.get("STOCK_DB_V2_DSN")
     if not dsn:
