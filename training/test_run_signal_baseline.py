@@ -35,3 +35,12 @@ def test_render_markdown_handles_none_values_and_missing_windows():
     md = render_markdown(results, code_commit="abc123")
     assert "abc123" in md and "val_2024" in md and "n/a" in md
     assert "oot_2026" in md  # pending window mentioned
+
+
+def test_render_markdown_accepts_int_per_class_keys_from_in_memory_metrics():
+    sig = compute_signal_metrics([], [], np.zeros((0, 3)))
+    row = {"signal": sig, "metrics": {"macro_f1": 0.33, "accuracy": 0.4, "mcc": 0.0,
+           "per_class": {c: {"precision": .3, "recall": .3, "f1": .3} for c in range(3)}},
+           "pred_share": {"buy": .3, "hold": .3, "sell": .4}}
+    results = {"val_2024": {"n_samples": 0, "window": "x", "model": row, "references": {}}}
+    assert "val_2024" in render_markdown(results, code_commit="abc")

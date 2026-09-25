@@ -119,7 +119,7 @@ def render_markdown(results: dict, code_commit: str) -> str:
             "| class | precision | recall | F1 |", "|---|---|---|---|",
         ]
         for c in ("0", "1", "2"):
-            pc = m["per_class"][c]
+            pc = m["per_class"][c] if c in m["per_class"] else m["per_class"][int(c)]  # str after JSON round-trip
             lines.append(f"| {c} | {_fmt(pc['precision'])} | {_fmt(pc['recall'])} | {_fmt(pc['f1'])} |")
         lines += [
             "", f"accuracy {_fmt(m['accuracy'])}, MCC {_fmt(m['mcc'])}. Mean next-day return by argmax group: "
