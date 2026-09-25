@@ -186,6 +186,130 @@ def select_hgb_iters(make, Xtr, ytr, Xsel, sel_dates, sel_ret, score_fn):
     return best, res
 
 
+CONFIG_DESC = {
+    "ridge_F1": "Ridge, F1", "ridge_F2": "Ridge, F2", "ridge_F3": "Ridge, F3",
+    "hgb_reg_F1": "HGB reg (z), F1", "hgb_reg_F2": "HGB reg (z), F2", "hgb_reg_F3": "HGB reg (z), F3",
+    "hgb_reg_csz_F3": "HGB reg (date-demeaned z), F3", "hgb_clf_F3": "HGB clf (label_vn), F3",
+}
+
+
+def _f(x, nd=4):
+    return "n/a" if x is None else f"{x:.{nd}f}"
+
+
+def _p(x):
+    return "n/a" if x is None else f"{x * 100:.2f}%"
+
+
+INTERPRETATION = """## Interpretation (SE-aware)
+
+Differences are called real only when they are >= ~2 paired SE.
+
+1. **The features contain a small amount of learnable cross-sectional signal.** Every config has a positive
+   mean IC on both windows; the best (HGB regressor, F3) has IC 0.058 (val, SE 0.010) and 0.044 (OOT, SE 0.012), about
+   6 SE from zero on val and ~4 SE on OOT. IC IR (HGB) 0.4-0.45 on val and 0.2-0.3 on OOT, i.e. small in absolute terms. Quantile L/S is about 0.1-0.3% per day
+   gross, before any transaction costs; this says nothing yet about tradability.
+2. **The deployed TFT is well below what a simple tabular model gets from the same 33 columns.** Paired IC difference vs TFT on
+   val: HGB F3 +0.043 (SE 0.0135, 3.2 SE), F2 +0.035 (2.7 SE), F1 +0.030 (2.3 SE), clf +0.035 (2.8 SE), demeaned-z +0.039 (3.1 SE);
+   ridge F1/F2 (+0.012/+0.013, ~1 SE) are not distinguishable from TFT. On OOT only HGB F3 (+0.049, SE 0.018, 2.7 SE) and
+   demeaned-z (+0.049, SE 0.023, 2.2 SE) clear 2 SE; the others are +0.02-0.038 with SE 0.02-0.025 (about 1-1.7 SE), i.e.
+   same direction, not individually conclusive. The TFT was selected on val 2024 macro F1, so the val comparison, if anything, favours it.
+   Because the tabular F1 models use the same columns as the TFT, the gap is attributable to the model/training setup, not to missing features.
+3. **No tabular model beats the trivial 1-day reversal rule; the best ones match it.** IC minus reversal is negative or
+   ~0 everywhere (best: HGB F3 -0.005 +/- 0.007 val, +0.002 +/- 0.014 OOT; ridge F1/F2 are significantly below on val, -0.035 +/- 0.008).
+   `log_ret` (the reversal input) is in every feature set, so we did not test whether the HGB signal is anything beyond
+   reversal plus noise; that decomposition (e.g. drop log_ret and its lags/ranks) is not done here.
+4. **Cross-sectional normalisation looks helpful but is not established.** Within HGB and ridge the F3 IC is higher than F1/F2
+   on val (ridge +0.014 vs F1, HGB +0.013 vs F1) but we did not compute paired SEs for feature-set differences and on OOT the
+   ordering is inconsistent (ridge F1 0.021 vs F3 0.018; HGB F1 0.029 vs F3 0.044). Treat as a hypothesis for the next experiment.
+5. **Val to OOT decay** (best HGB 0.058 to 0.044, ridge and clf similar) is within noise (SE ~0.01-0.015 per window) and cannot
+   be distinguished from stationarity. argmax L/S (pooled, sign of the score) is negative for most tabular models on OOT because
+   the score sign is not calibrated per day; IC and quantile L/S are the meaningful columns.
+6. **Production tickers (005930, 000660):** all |rho| <= 0.14 (< 2 SE) and hit-rates are within ~2 SE of 50% (SE ~0.07 / ~0.037); nothing can be
+   said per ticker. A cross-sectional IC of ~0.05 says the ranking helps on average across 200 names, not that any single name is predictable.
+7. **Selection caveat:** the 8 configs were all scored on val and OOT, and "best" above is picked with hindsight on those windows
+   (mildly optimistic, ~8 tries); OOT was scored once per config. HGB hyper-parameters other than n_iter (or ridge alpha) were fixed a priori and untuned.
+
+**What this supports:** the features are not empty and TFT-as-trained is extracting less than gradient boosting does; label/regularisation
+experiments on the TFT are worth running with IC (not macro F1) as the criterion, and HGB-F3 / reversal (IC ~0.05-0.06) is the bar to clear.
+**What it does not support:** a claim that tabular beats reversal, that the signal survives costs, or that cross-sectional ranks are the cause of the gain.
+"""
+
+
+def render_doc(r: dict) -> str:
+    L = ["# Tabular baseline (E0): is there learnable signal in the champion features?", "",
+         f"Code commit: `{r['code_commit']}` (`training/run_tabular_baseline.py`, `training/tabular_features.py`). "
+         "Raw output: `training/artifacts/tabular_baseline.json` (gitignored, like the other artifacts).", "",
+         "## Protocol", "",
+         "- Same sample sets and metrics as S3 (`docs/signal_baseline.md`). The samples were re-enumerated with "
+         "`TickerDayDataset` + `filter_index_by_target_date` on the S3 caches and asserted identical, in order, to the "
+         "(ticker, date) list S3 stored: "
+         + "; ".join(f"**{w}** targets {v['targets']}, {v['n_samples']} samples, {v['n_days_scored']} scored days"
+                     for w, v in r["windows"].items()) + ". `next_day_return` of every sample was asserted equal to S3's.",
+         "- Score = model output (regression prediction, or p_buy - p_sell for the classifier); converted to the S3 "
+         "pseudo-probs form via `score_to_probs` and scored with `compute_signal_metrics`. IC SE = IC std / sqrt(n_days).",
+         "- Training rows: 2019-01-02.., a row needs >= 60 prior rows (mirrors the TFT encoder), finite `next_day_return` and "
+         "`volatility_20d`. Hyper-parameter selection used only a time-ordered split inside the train era: fit on rows "
+         "<= 2022-12-31, select on 2023 rows (mean daily rank IC), refit on rows <= 2023-12-31. 2025 rows are never used.",
+         f"- Target z = next_day_return / max(volatility_20d, floor={r['floor']:.6f}) clipped to [-5, 5] "
+         "(floor from `training/threshold_vn.json`). Classifier target = `label_vn` (classes 0=buy, 1=hold, 2=sell).",
+         "- Feature sets. F1: the 33 champion columns at day t. F2: F1 + log_ret lags 1..5 (per-ticker shift). "
+         "F3: F2 + per-date cross-sectional percentile ranks of log_ret, disparity_5d/20d/60d, rsi_14, volatility_20d and the 5 lags. "
+         "Event flags NULL -> 0; other NaN handled per model.",
+         "- Ridge: winsorise at train 0.5/99.5 pct, NaN -> train median, standardise (all train statistics). "
+         "HGB (sklearn `HistGradientBoosting`; lightgbm is not installed): lr 0.05, max_depth 4, min_samples_leaf 500, "
+         "l2 10, max_bins 64, native NaN, no early stopping.",
+         f"- Configs tried: {len(CONFIG_DESC)} (3 Ridge, 3 HGB regressors, 1 HGB regressor on the date-demeaned z, 1 HGB classifier). "
+         "The date-demeaned-z config removes the market-wide component from the regression target (the plain regressor's "
+         "first trees split on date-level columns, giving a constant score per day, so its IC is undefined at 25 iterations). "
+         "All 8 configs are reported.", "",
+         "## Selection on 2023 (fit on <= 2022)", "",
+         "| config | grid searched (mean daily IC on 2023) | chosen |", "|---|---|---|"]
+    for k, v in r["selection"].items():
+        grid = v.get("grid_select_ic_2023") or v.get("select_ic_2023_by_iter")
+        ch = f"alpha={v['chosen_alpha']:g}" if "chosen_alpha" in v else f"n_iter={v['chosen_n_iter']}"
+        L.append(f"| {k} | " + ", ".join(f"{a}: {_f(b, 3)}" for a, b in grid.items()) + f" | {ch} |")
+    L += ["", "Caveats: `ridge_F3` picked alpha at 1e5 (interior of the grid, 1e6 is worse); `hgb_reg_csz_F3` picked the "
+          "smallest n_iter in the grid (25) with IC still falling as iterations increase, so its optimum may be lower still; "
+          "`hgb_clf_F3` picked the largest (400) with IC still rising.", ""]
+    for w, v in r["windows"].items():
+        L += [f"## {w} (targets {v['targets']}; {v['n_samples']} samples, {v['n_days_scored']} days)", "",
+              "| scorer | mean rank IC | SE | IC IR | quantile L/S | argmax L/S | IC minus TFT (SE of diff) | IC minus reversal (SE of diff) |",
+              "|---|---|---|---|---|---|---|---|"]
+        rows = [(CONFIG_DESC[k], r["configs"][k][w]) for k in CONFIG_DESC]
+        rows += [("TFT champion (S3)", r["references"][w]["tft_champion"]), ("reversal (S3)", r["references"][w]["reversal"]),
+                 ("random (S3)", r["references"][w]["random"])]
+        for name, b in rows:
+            s = b["signal"]
+            d1, d2 = b.get("vs_tft"), b.get("vs_reversal")
+            L.append(f"| {name} | {_f(s['mean_daily_rank_ic'])} | {_f(b['ic_se'])} | {_f(s['ic_ir'], 3)} | "
+                     f"{_p(s['quantile_long_short']['mean_spread'])} | {_p(s['argmax_long_short']['spread'])} | "
+                     + (f"{d1['mean_diff']:+.4f} ({d1['se']:.4f}) | " if d1 else "- | ")
+                     + (f"{d2['mean_diff']:+.4f} ({d2['se']:.4f}) |" if d2 else "- |"))
+        L.append("")
+    L += ["The TFT / reversal / random rows are recomputed from S3's saved probabilities and asserted equal to "
+          "`signal_baseline.json` (mean IC to 1e-9); the paired differences use the per-day IC series over days present in both "
+          "(same days for all scorers), so their SE is much tighter than that of two independent means.", "",
+          "## Production tickers (noisy)", "",
+          "Time-series Spearman(score, next_day_return) over the window's days for one ticker, and sign hit-rate "
+          "(sign(score) == sign(return), zero-return days excluded; the base rate of up days is shown for context). "
+          "n is about 170-185 days, so SE of a correlation is about 0.07-0.08 and hit-rate SE about 0.037: "
+          "**none of these per-ticker numbers is distinguishable from zero / 50%.**", "",
+          "| scorer | window | 005930 rho | 005930 hit (up-rate) | 000660 rho | 000660 hit (up-rate) |", "|---|---|---|---|---|---|"]
+    for w in r["windows"]:
+        rows = [(CONFIG_DESC[k], r["configs"][k][w]) for k in CONFIG_DESC]
+        rows += [("TFT champion", r["references"][w]["tft_champion"]), ("reversal", r["references"][w]["reversal"])]
+        for name, b in rows:
+            cells = []
+            for t in PROD_TICKERS:
+                m = b["per_ticker"][t]
+                cells += [_f(m["spearman"], 3), f"{_f(m['hit_rate'], 3)} ({_f(m['base_up_rate'], 2)}), n={m['n']}"]
+            L.append(f"| {name} | {w} | " + " | ".join(cells) + " |")
+    L.append("")
+    L.append(INTERPRETATION)
+    return "\n".join(L)
+
+
 def main():
     from sklearn.ensemble import HistGradientBoostingClassifier, HistGradientBoostingRegressor
     from sklearn.linear_model import Ridge
@@ -318,7 +442,13 @@ def main():
     with open(RESULT_JSON, "w") as f:
         json.dump(results, f, indent=2, ensure_ascii=False)
     logger.info("wrote %s", RESULT_JSON)
+    with open(DOC_PATH, "w") as f:
+        f.write(render_doc(results))
 
 
 if __name__ == "__main__":
-    main()
+    if "--render-only" in sys.argv:
+        with open(DOC_PATH, "w") as f:
+            f.write(render_doc(json.load(open(RESULT_JSON))))
+    else:
+        main()
