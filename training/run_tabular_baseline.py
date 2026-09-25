@@ -38,13 +38,13 @@ LOAD_END = "2026-09-08"
 WARMUP_ROWS = 60           # mirror the TFT encoder: a row needs >=60 prior rows in the loaded frame
 EXPECTED = {"val_2024": 36729, "oot_2026": 33364}
 WINDOWS = {"val_2024": "2024-01-01..2024-12-31", "oot_2026": "2026-01-01..2026-09-07"}
-CACHES = {"val_2024": (f"{ART}/stage1_cache_val_2024-01-01_2024-12-31.pkl", "2026-01-01"),
+CACHES = {"val_2024": (f"{ART}/stage1_cache_val_2024-01-01_2024-12-31.pkl", "2024-01-01"),
           "oot_2026": (f"{ART}/stage1_cache_oot_2025-09-01_2026-09-08.pkl", "2026-01-01")}
 PROD_TICKERS = ["005930", "000660"]
 RANK_BASE = ["log_ret", "disparity_5d", "disparity_20d", "disparity_60d", "rsi_14", "volatility_20d"]
 LAGS = [1, 2, 3, 4, 5]
 EVENT_COLS = ["is_dividend", "is_bonus_issue", "is_rights_offering", "is_split", "is_vi_triggered"]
-RIDGE_ALPHAS = [10.0, 1_000.0, 100_000.0]
+RIDGE_ALPHAS = [10.0, 1_000.0, 100_000.0, 1_000_000.0]
 HGB_ITERS = [25, 50, 100, 200, 300, 400]
 HGB_PARAMS = dict(learning_rate=0.05, max_depth=4, min_samples_leaf=500, l2_regularization=10.0,
                   max_bins=64, early_stopping=False, random_state=0)
@@ -166,6 +166,12 @@ def paired_diff(ics_a: dict, ics_b: dict):
     return {"mean_diff": float(d.mean()), "se": float(d.std(ddof=1) / np.sqrt(len(d))), "n_days": len(d)}
 
 
+def mean_ic(dates, rets, score) -> float:
+    """Mean daily rank IC; NaN if undefined on every day (e.g. constant-per-day score)."""
+    v = list(daily_ics(dates, rets, score).values())
+    return float(np.mean(v)) if v else float("nan")
+
+
 def select_hgb_iters(make, Xtr, ytr, Xsel, sel_dates, sel_ret, score_fn):
     """Fit once with max iters, score staged predictions on the 2023 split, return best n_iter."""
     model = make(max(HGB_ITERS)).fit(Xtr, ytr)
@@ -173,16 +179,15 @@ def select_hgb_iters(make, Xtr, ytr, Xsel, sel_dates, sel_ret, score_fn):
     for i, pred in enumerate(score_fn(model, Xsel)):
         n_it = i + 1
         if n_it in HGB_ITERS:
-            ics = daily_ics(sel_dates, sel_ret, pred)
-            res[n_it] = float(np.mean(list(ics.values())))
-    best = max(res, key=res.get)
+            res[n_it] = mean_ic(sel_dates, sel_ret, pred)
+    best = argmax_nan_safe(res)
     return best, res
 
 
 def main():
     from sklearn.ensemble import HistGradientBoostingClassifier, HistGradientBoostingRegressor
     from sklearn.linear_model import Ridge
-    from training.tabular_features import Preprocessor, make_z_target
+    from training.tabular_features import Preprocessor, argmax_nan_safe, demean_by_date, make_z_target
 
     dsn = os.environ.get("STOCK_DB_V2_DSN")
     if not dsn:
@@ -240,8 +245,8 @@ def main():
         rs = {}
         for a in RIDGE_ALPHAS:
             m = Ridge(alpha=a).fit(Xf, tr_fit["z"].values)
-            rs[a] = float(np.mean(list(daily_ics(sel_dates, sel_ret, m.predict(Xs)).values())))
-        best_a = max(rs, key=rs.get)
+            rs[a] = mean_ic(sel_dates, sel_ret, m.predict(Xs))
+        best_a = argmax_nan_safe(rs)
         results["selection"][f"ridge_{fname}"] = {"grid_select_ic_2023": {str(k): v for k, v in rs.items()},
                                                   "chosen_alpha": best_a}
         pp = Preprocessor().fit(tr_full[cols].values)
@@ -257,6 +262,18 @@ def main():
                                                     "chosen_n_iter": best_n}
         m = mk(best_n).fit(tr_full[cols].values, tr_full["z"].values)
         score_windows(f"hgb_reg_{fname}", lambda X, m=m: m.predict(X), cols)
+
+    # ---- HGB regressor on the date-demeaned z (cross-sectional target), F3 ----
+    cols = fsets["F3"]
+    zc_fit = demean_by_date(tr_fit["date_s"].values, tr_fit["z"].values)
+    zc_full = demean_by_date(tr_full["date_s"].values, tr_full["z"].values)
+    mk = lambda n: HistGradientBoostingRegressor(max_iter=n, **HGB_PARAMS)  # noqa: E731
+    best_n, res = select_hgb_iters(mk, tr_fit[cols].values, zc_fit, tr_sel[cols].values, sel_dates, sel_ret,
+                                   lambda model, X: model.staged_predict(X))
+    results["selection"]["hgb_reg_csz_F3"] = {"select_ic_2023_by_iter": {str(k): v for k, v in res.items()},
+                                              "chosen_n_iter": best_n}
+    m = mk(best_n).fit(tr_full[cols].values, zc_full)
+    score_windows("hgb_reg_csz_F3", lambda X, m=m: m.predict(X), cols)
 
     # ---- HGB classifier on label_vn (F3): score = p_buy - p_sell ----
     cols = fsets["F3"]

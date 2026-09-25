@@ -98,3 +98,20 @@ def test_per_ticker_ts_metrics():
     assert m["spearman"] == pytest.approx(-1.0)
     m = per_ticker_ts_metrics(np.array([np.nan, 1.0]), np.array([1.0, 1.0]))
     assert m["n"] == 1 and m["spearman"] is None
+
+
+def test_demean_by_date_removes_market_component_only_within_date():
+    from training.tabular_features import demean_by_date
+    dates = np.array(["d1", "d1", "d2", "d2", "d2"])
+    y = np.array([1.0, 3.0, 10.0, 20.0, np.nan])
+    out = demean_by_date(dates, y)
+    assert out[:2].tolist() == [-1.0, 1.0]
+    assert out[2:4].tolist() == [-5.0, 5.0]      # NaN ignored in the mean
+    assert np.isnan(out[4])
+
+
+def test_nan_safe_argmax():
+    from training.tabular_features import argmax_nan_safe
+    assert argmax_nan_safe({25: float("nan"), 50: -0.1, 100: 0.02}) == 100
+    with pytest.raises(ValueError):
+        argmax_nan_safe({1: float("nan")})

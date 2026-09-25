@@ -76,3 +76,18 @@ def per_ticker_ts_metrics(score, ret) -> dict:
     hit = float((np.sign(s[nz]) == np.sign(r[nz])).mean()) if nz.any() else None
     up = float((r[nz] > 0).mean()) if nz.any() else None
     return {"n": n, "spearman": rho, "hit_rate": hit, "base_up_rate": up}
+
+
+def demean_by_date(dates, y) -> np.ndarray:
+    """y minus its same-date mean (NaN ignored, kept NaN): a cross-sectional target that removes
+    the market-wide component shared by all tickers on a day."""
+    s = pd.Series(np.asarray(y, dtype=float))
+    return (s - s.groupby(np.asarray(dates, dtype=object)).transform("mean")).values
+
+
+def argmax_nan_safe(scores: dict):
+    """Key with the largest finite value; NaN entries (e.g. undefined IC) are never selected."""
+    ok = {k: v for k, v in scores.items() if v == v}
+    if not ok:
+        raise ValueError("all candidate scores are NaN")
+    return max(ok, key=ok.get)
