@@ -62,3 +62,82 @@ def test_weight_schemes_registry_maps_names_to_the_three_functions():
     assert WEIGHT_SCHEMES["balanced"] is compute_class_weights
     assert WEIGHT_SCHEMES["uniform"] is compute_uniform_class_weights
     assert WEIGHT_SCHEMES["mild"] is compute_mild_class_weights
+
+
+# ---- S2: label_col switch ------------------------------------------------------------
+import pandas as pd
+import pytest
+from training import stage1_data as sd
+
+
+def test_resolve_cache_path_default_label_keeps_existing_filename():
+    p = "training/artifacts/stage1_cache_train_2019-01-02_2023-12-31.pkl"
+    assert sd.resolve_cache_path(p, "label") == p
+
+
+def test_resolve_cache_path_other_label_gets_distinct_filename():
+    p = "training/artifacts/stage1_cache_train_2019-01-02_2023-12-31.pkl"
+    q = sd.resolve_cache_path(p, "label_vn")
+    assert q != p
+    assert q == "training/artifacts/stage1_cache_train_2019-01-02_2023-12-31__label_vn.pkl"
+
+
+def test_label_select_expr_default_and_alias():
+    assert sd.label_select_expr("label") == "label"
+    assert sd.label_select_expr("label_vn") == "label_vn AS label"
+
+
+def test_label_select_expr_rejects_unknown_column():
+    with pytest.raises(ValueError):
+        sd.label_select_expr("label; DROP TABLE feature_pool")
+
+
+def test_query_feature_pool_aliases_chosen_label_column(monkeypatch):
+    seen = {}
+
+    class _Cur:
+        description = [("ticker",), ("label",)]
+        def __enter__(self): return self
+        def __exit__(self, *a): pass
+        def execute(self, q, params): seen["q"] = q
+        def fetchall(self): return []
+
+    class _Conn:
+        def cursor(self, cursor_factory=None): return _Cur()
+        def close(self): pass
+
+    monkeypatch.setattr(sd.psycopg2, "connect", lambda dsn: _Conn())
+    sd.query_feature_pool("dsn", "2019-01-02", "2019-12-31", label_col="label_vn")
+    assert "label_vn AS label" in seen["q"]
+    sd.query_feature_pool("dsn", "2019-01-02", "2019-12-31")
+    assert "label_vn" not in seen["q"] and ", label\n" in seen["q"]
+
+
+def test_load_or_build_uses_label_specific_cache_and_default_cache(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(sd, "query_feature_pool",
+                        lambda dsn, s, e, label_col="label": calls.append(label_col) or
+                        pd.DataFrame({"ticker": ["A"], "trade_date": ["2019-01-02"], "label": [1]}))
+    monkeypatch.setattr(sd, "build_ticker_dfs", lambda df, label_col="label": {"A": df})
+    base = str(tmp_path / "c.pkl")
+    sd.load_or_build_ticker_dfs("dsn", "s", "e", base)                      # writes c.pkl
+    sd.load_or_build_ticker_dfs("dsn", "s", "e", base, label_col="label_vn")  # writes c__label_vn.pkl
+    sd.load_or_build_ticker_dfs("dsn", "s", "e", base)                      # cache hit
+    sd.load_or_build_ticker_dfs("dsn", "s", "e", base, label_col="label_vn")  # cache hit
+    assert calls == ["label", "label_vn"]
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["c.pkl", "c__label_vn.pkl"]
+
+
+def test_build_ticker_dfs_renames_raw_label_col_to_label():
+    df = pd.DataFrame({"ticker": ["A", "A"], "trade_date": ["2019-01-02", "2019-01-03"],
+                       "x": [1.0, None], "label_vn": [2, None]})
+    out = sd.build_ticker_dfs(df, label_col="label_vn")["A"]
+    assert "label" in out.columns and "label_vn" not in out.columns
+    assert out["label"].iloc[0] == 2.0 and pd.isna(out["label"].iloc[1])
+    assert out["x"].iloc[1] == 0.0  # label NaN preserved, features filled
+
+
+def test_build_ticker_dfs_default_unchanged_and_aliased_frame_ok():
+    df = pd.DataFrame({"ticker": ["A"], "trade_date": ["2019-01-02"], "x": [1.0], "label": [1]})
+    assert sd.build_ticker_dfs(df)["A"]["label"].iloc[0] == 1.0
+    assert sd.build_ticker_dfs(df, label_col="label_vn")["A"]["label"].iloc[0] == 1.0

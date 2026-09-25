@@ -28,7 +28,28 @@ DB_FUTURE_COLS = ["is_bok", "is_fomc", "is_witching_kr", "is_witching_us"]
 TIME_PROGRESS_CONSTANT = 1.0
 
 
-def query_feature_pool(dsn: str, start_date: str, end_date: str) -> pd.DataFrame:
+# Label columns present on feature_pool that may be selected as the training target.
+LABEL_COLS = ("label", "label_vn")
+
+
+def label_select_expr(label_col: str) -> str:
+    """SQL select expression yielding the chosen label column under the name `label`.
+    Whitelisted (LABEL_COLS) because the name is interpolated into SQL."""
+    if label_col not in LABEL_COLS:
+        raise ValueError(f"unknown label_col {label_col!r}; expected one of {LABEL_COLS}")
+    return "label" if label_col == "label" else f"{label_col} AS label"
+
+
+def resolve_cache_path(cache_path: str, label_col: str = "label") -> str:
+    """Default label keeps the existing cache filename (existing caches stay valid); any other
+    label column gets a distinct '<stem>__<label_col><ext>' so caches can never be confused."""
+    if label_col == "label":
+        return cache_path
+    stem, ext = os.path.splitext(cache_path)
+    return f"{stem}__{label_col}{ext}"
+
+
+def query_feature_pool(dsn: str, start_date: str, end_date: str, label_col: str = "label") -> pd.DataFrame:
     """Query feature_pool for HISTORICAL_COLS_DEFAULT + the DB-backed future cols + STATIC_COLS
     + label, across the full ticker universe, for one date range.
 
@@ -40,7 +61,7 @@ def query_feature_pool(dsn: str, start_date: str, end_date: str) -> pd.DataFrame
     cols = HISTORICAL_COLS_DEFAULT + DB_FUTURE_COLS + STATIC_COLS
     col_sql = ", ".join(cols)
     query = f"""
-        SELECT ticker, trade_date, {col_sql}, label
+        SELECT ticker, trade_date, {col_sql}, {label_select_expr(label_col)}
         FROM feature_pool
         WHERE trade_date >= %s AND trade_date <= %s
         ORDER BY ticker, trade_date
@@ -56,7 +77,7 @@ def query_feature_pool(dsn: str, start_date: str, end_date: str) -> pd.DataFrame
     return pd.DataFrame([list(r) for r in rows], columns=colnames)
 
 
-def build_ticker_dfs(df: pd.DataFrame) -> dict[str, pd.DataFrame]:
+def build_ticker_dfs(df: pd.DataFrame, label_col: str = "label") -> dict[str, pd.DataFrame]:
     """Split the flat feature_pool query result into a per-ticker dict of DataFrames, sorted by
     trade_date, with a synthetic time_progress column added and NaNs filled to 0.0.
 
@@ -72,6 +93,15 @@ def build_ticker_dfs(df: pd.DataFrame) -> dict[str, pd.DataFrame]:
     disparity_60d/rsi_14/etc. had zero NULLs in the checked range (build_features.py already
     handles the 60-day rolling-window warmup), so this fillna is a safety net, not load-bearing.
     """
+    if label_col != "label":
+        # query_feature_pool already aliases the chosen column to `label`; this also accepts a raw
+        # frame that still carries the chosen column under its own name.
+        if "label" not in df.columns:
+            if label_col not in df.columns:
+                raise ValueError(f"df has neither 'label' nor {label_col!r}")
+            df = df.rename(columns={label_col: "label"})
+        elif label_col in df.columns:
+            df = df.drop(columns=[label_col])
     numeric_cols = [c for c in df.columns if c not in ("ticker", "trade_date", "label")]
     ticker_dfs: dict[str, pd.DataFrame] = {}
     for ticker, group in df.groupby("ticker"):
@@ -83,18 +113,20 @@ def build_ticker_dfs(df: pd.DataFrame) -> dict[str, pd.DataFrame]:
     return ticker_dfs
 
 
-def load_or_build_ticker_dfs(dsn: str, start_date: str, end_date: str, cache_path: str) -> dict[str, pd.DataFrame]:
+def load_or_build_ticker_dfs(dsn: str, start_date: str, end_date: str, cache_path: str,
+                             label_col: str = "label") -> dict[str, pd.DataFrame]:
     """DB-load + per-ticker frame construction is the expensive, trial-independent part of the
     pipeline (unlike TickerDayDataset construction, which is cheap and must be rebuilt per
     ablation config since the column subset changes) -- cache it to disk so 20 Optuna trials +
     7 ablation runs don't each re-run the same ~250k-row query."""
+    cache_path = resolve_cache_path(cache_path, label_col)
     if os.path.exists(cache_path):
         logger.info("Loading cached ticker dataframes from %s", cache_path)
         with open(cache_path, "rb") as f:
             return pickle.load(f)
     logger.info("Querying feature_pool for %s..%s (no cache at %s)", start_date, end_date, cache_path)
-    df = query_feature_pool(dsn, start_date, end_date)
-    ticker_dfs = build_ticker_dfs(df)
+    df = query_feature_pool(dsn, start_date, end_date, label_col=label_col)
+    ticker_dfs = build_ticker_dfs(df, label_col=label_col)
     os.makedirs(os.path.dirname(cache_path) or ".", exist_ok=True)
     with open(cache_path, "wb") as f:
         pickle.dump(ticker_dfs, f)
