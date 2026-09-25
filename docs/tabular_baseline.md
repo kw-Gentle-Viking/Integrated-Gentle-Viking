@@ -1,5 +1,12 @@
 # Tabular baseline (E0): is there learnable signal in the champion features?
 
+> **정정 (2026-09-26, 독립 리뷰 지적 — 이 문서의 해석 일부는 무효):**
+> 1. **TFT 정렬 결함**: `TickerDayDataset`은 인코더로 d−60…d−1일을 넣고 라벨은 d일 종가→d+1일 수익률(행 d의 라벨)을 씀 — TFT는 **당일(d) 종가 정보 없이** 예측했음(사실상 2일 앞 예측). 반면 표형 모델/반전 규칙은 d일 정보를 봄. 따라서 아래의 "TFT vs GBM/반전 IC 격차"는 **모델 능력 차이가 아니라 정보량이 다른 비교**이며, "배포 모델의 신호가 ≈0"은 "현재 정렬 그대로 학습·평가된 모델" 한정 결론으로만 유효함(한 칸 늦은 반전 규칙의 IC는 val −0.003 / OOT +0.035로 TFT와 비슷 — 리뷰어 측정). 서빙은 마지막 인코더 스텝이 '오늘'이라 학습과 어긋나 있었음. 수정 작업 중(align="today").
+> 2. **가격 데이터가 수정주가 미반영**(FID_ORG_ADJ_PRC="1")이었음 — 이 문서의 모든 수치는 오염된 데이터 기준. 재백필/재빌드 후 재산출 예정.
+> 3. "val 2024" 표본의 실제 타깃일 범위는 2024-03-29..2024-12-30(앞 60행은 워밍업). 일별 IC의 SE는 일 간 독립을 가정.
+> 4. 레버리지 피처 3종(lev_total_aum, lev_aum_to_mktcap, est_rebalancing_flow)은 전 기간 0인 죽은 컬럼.
+
+
 Model/metric code commit: `af077f8` (results produced by it; later commit `4a6b643` only added doc rendering) (`training/run_tabular_baseline.py`, `training/tabular_features.py`). Raw output: `training/artifacts/tabular_baseline.json` (gitignored, like the other artifacts).
 
 ## Protocol
