@@ -26,7 +26,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from torch.utils.data import DataLoader
 
 from training.config import HISTORICAL_COLS_DEFAULT, KNOWN_FUTURE_COLS, STATIC_COLS
-from training.dataset import TickerDayDataset
+from training.dataset import TickerDayDataset, target_offset_of
 from training.run_stage1_search import LEVERAGE_FEATURES
 from training.select_stage1_champion import evaluate_on_test, select_champion
 from training.stage1_data import load_or_build_ticker_dfs
@@ -147,7 +147,7 @@ def dates_for_dataset(test_ds: TickerDayDataset) -> list[str]:
     shuffle=False DataLoader over it) iterates -- required for split_by_regime alignment."""
     dates = []
     for ticker, t in test_ds.index:
-        row = test_ds.ticker_dfs[ticker].loc[t + test_ds.encoder_len]
+        row = test_ds.ticker_dfs[ticker].loc[t + target_offset_of(test_ds)]
         d = row["trade_date"]
         dates.append(d.strftime("%Y-%m-%d") if hasattr(d, "strftime") else str(d))
     return dates

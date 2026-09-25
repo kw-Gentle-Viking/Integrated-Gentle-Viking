@@ -12,6 +12,7 @@ import psycopg2.extras
 import torch
 
 from training.config import HISTORICAL_COLS_DEFAULT, STATIC_COLS
+from training.dataset import target_offset_of
 
 logger = logging.getLogger(__name__)
 
@@ -141,7 +142,7 @@ def compute_label_distribution(dataset) -> dict[int, int]:
     trains against, so it's what class weights should be derived from."""
     counts = {0: 0, 1: 0, 2: 0}
     for ticker, t in dataset.index:
-        label = int(dataset.ticker_dfs[ticker].loc[t + dataset.encoder_len, "label"])
+        label = int(dataset.ticker_dfs[ticker].loc[t + target_offset_of(dataset), "label"])
         counts[label] += 1
     return counts
 

@@ -5,6 +5,8 @@ fetched separately (read-only) and joined by (ticker, target date)."""
 import numpy as np
 import psycopg2
 
+from training.dataset import target_offset_of
+
 
 def _fmt_date(d) -> str:
     return d.strftime("%Y-%m-%d") if hasattr(d, "strftime") else str(d)
@@ -17,7 +19,7 @@ def sample_meta(ds) -> list[tuple[str, str, float]]:
     when predicting the NEXT day -- used for the reversal/momentum reference heuristic."""
     out = []
     for ticker, t in ds.index:
-        row = ds.ticker_dfs[ticker].loc[t + ds.encoder_len]
+        row = ds.ticker_dfs[ticker].loc[t + target_offset_of(ds)]
         out.append((ticker, _fmt_date(row["trade_date"]), float(row["log_ret"])))
     return out
 
@@ -28,7 +30,7 @@ def filter_index_by_target_date(ds, min_target_date: str) -> int:
     before = len(ds.index)
     ds.index = [
         (ticker, t) for ticker, t in ds.index
-        if _fmt_date(ds.ticker_dfs[ticker].loc[t + ds.encoder_len, "trade_date"]) >= min_target_date
+        if _fmt_date(ds.ticker_dfs[ticker].loc[t + target_offset_of(ds), "trade_date"]) >= min_target_date
     ]
     return before - len(ds.index)
 
