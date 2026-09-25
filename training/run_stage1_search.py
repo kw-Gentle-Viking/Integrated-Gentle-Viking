@@ -135,7 +135,8 @@ def _is_oom(exc: Exception) -> bool:
 
 def train_and_score(historical_cols: list[str], hparams: dict, epochs: int, run_name: str,
                      train_ds: TickerDayDataset, val_ds: TickerDayDataset,
-                     class_weights: torch.Tensor, device: torch.device) -> dict:
+                     class_weights: torch.Tensor, device: torch.device,
+                     epoch_checkpoint_path: str | None = None) -> dict:
     """Train `epochs` epochs via training.train.run_training (Task 13, reused as-is -- handles
     wandb + checkpointing), then load the best checkpoint and compute val macro-F1 via
     evaluation.evaluate.compute_metrics (Task 14) -- run_training itself only tracks val loss."""
@@ -158,6 +159,11 @@ def train_and_score(historical_cols: list[str], hparams: dict, epochs: int, run_
         "run_name": run_name, "checkpoint_dir": CHECKPOINT_DIR,
         "wandb_config": {**hparams, "epochs": epochs, "n_historical_features": len(historical_cols)},
     }
+    if epoch_checkpoint_path:
+        # Optional epoch-level resume (run_training already supports it, added for Task 17): an
+        # interrupted run picks up from the next epoch instead of epoch 0. Omitted by default so
+        # the Stage-1 Optuna/ablation callers behave exactly as before.
+        config["epoch_checkpoint_path"] = epoch_checkpoint_path
     result = run_training(config)
 
     model = TemporalFusionTransformer(tft_config).to(device)

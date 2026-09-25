@@ -311,8 +311,11 @@ def main(argv=None) -> None:
         class_weights = WEIGHT_SCHEMES[scheme](label_counts)
         run_name = f"classweight-{scheme}"
         logger.info("scheme=%s class_weights=%s", scheme, class_weights.tolist())
+        # Epoch-level resume: each scheme is ~55 min of GPU time and the GPU is shared, so an
+        # interruption mid-scheme should cost at most one epoch, not the whole scheme.
         result = train_and_score(columns, hparams, args.epochs, run_name, train_ds, val_ds,
-                                  class_weights, device)
+                                  class_weights, device,
+                                  epoch_checkpoint_path=f"{CHECKPOINT_DIR}/{run_name}_inprogress.pt")
         result["class_weights"] = class_weights.tolist()
         return result
 
