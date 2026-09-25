@@ -191,3 +191,51 @@ def test_sector_codes_has_20_entries_matching_documented_mapping():
     assert SECTOR_CODES[8] == "0013"  # index 8 == "전기·전자" per backfill_sector_id.SECTOR_NAMES
     assert SECTOR_CODES[-1] == "0026"
     assert "0022" not in SECTOR_CODES and "0023" not in SECTOR_CODES
+
+
+# ---- label_vn must survive a rebuild (regression guard; cf. commit 1eaf049) ----------------
+from features import build_features as bf
+
+
+def test_label_columns_include_label_vn_alongside_label_and_next_day_return():
+    assert "label_vn" in bf.LABEL_COLUMNS
+    assert {"label", "next_day_return"} <= set(bf.LABEL_COLUMNS)
+
+
+def test_load_labels_selects_label_vn(monkeypatch):
+    captured = {}
+
+    class _Conn:
+        def close(self):
+            pass
+
+    monkeypatch.setattr(bf.psycopg2, "connect", lambda dsn: _Conn())
+
+    def fake_read_sql(query, conn, params=None):
+        captured["query"] = query
+        return pd.DataFrame({"ticker": [], "trade_date": []})
+
+    monkeypatch.setattr(bf.pd, "read_sql", fake_read_sql)
+    bf.load_labels("dsn", "2019-01-02", "2019-12-31")
+    assert "label_vn" in captured["query"]
+
+
+def test_join_labels_carries_label_vn_into_feature_pool():
+    fp = pd.DataFrame({"ticker": ["A", "A"], "trade_date": pd.to_datetime(["2024-01-02", "2024-01-03"])})
+    labels = pd.DataFrame({"ticker": ["A"], "trade_date": pd.to_datetime(["2024-01-02"]),
+                           "next_day_return": [0.01], "label": [0], "label_vn": [2]})
+    out = bf.join_labels(fp, labels)
+    assert "label_vn" in out.columns
+    assert out["label_vn"].iloc[0] == 2 and pd.isna(out["label_vn"].iloc[1])
+
+
+def test_join_labels_empty_labels_still_produces_label_vn_column():
+    fp = pd.DataFrame({"ticker": ["A"], "trade_date": pd.to_datetime(["2024-01-02"])})
+    out = bf.join_labels(fp, pd.DataFrame())
+    assert {"label", "next_day_return", "label_vn"} <= set(out.columns)
+
+
+def test_stale_columns_never_flags_label_vn_when_build_output_has_it():
+    build_cols = ["ticker", "trade_date", "close_price"] + bf.LABEL_COLUMNS
+    existing = set(build_cols) | {"old_sector_col"}
+    assert bf.compute_stale_columns(existing, build_cols) == {"old_sector_col"}

@@ -354,11 +354,34 @@ def load_leverage_daily_and_products(dsn: str, start_date: str, end_date: str) -
     return df_daily, df_products
 
 
+# Columns owned by the labels table and joined into feature_pool. label_vn (volatility-normalised
+# label, populated by training/run_derive_volnorm_labels.py) MUST be listed here: anything on the
+# live feature_pool that this build does not itself produce is dropped as stale (see 1eaf049).
+LABEL_COLUMNS = ['next_day_return', 'label', 'label_vn']
+
+
+def compute_stale_columns(existing_cols, build_columns, extra_owned=()) -> set:
+    """Live feature_pool columns this build should drop: not produced by the build df, not the
+    key, and not owned by another writer (extra_owned, e.g. MACRO_DERIVED_COLUMNS)."""
+    expected = set(build_columns) | {'ticker', 'trade_date'} | set(extra_owned)
+    return set(existing_cols) - expected
+
+
+def join_labels(feature_pool: pd.DataFrame, labels_df: pd.DataFrame) -> pd.DataFrame:
+    """Left-join the labels table's columns (LABEL_COLUMNS) onto feature_pool."""
+    if not labels_df.empty:
+        return feature_pool.merge(labels_df, on=['ticker', 'trade_date'], how='left')
+    feature_pool = feature_pool.copy()
+    for col in LABEL_COLUMNS:
+        feature_pool[col] = None
+    return feature_pool
+
+
 def load_labels(dsn: str, start_date: str, end_date: str) -> pd.DataFrame:
-    """Load labels table (Task 9 output)."""
+    """Load labels table (Task 9 output + label_vn)."""
     conn = psycopg2.connect(dsn)
-    query = """
-        SELECT ticker, trade_date, next_day_return, label
+    query = f"""
+        SELECT ticker, trade_date, {', '.join(LABEL_COLUMNS)}
         FROM labels
         WHERE trade_date >= %s AND trade_date <= %s
         ORDER BY ticker, trade_date
@@ -498,11 +521,7 @@ def merge_features(price_df: pd.DataFrame, market_global_df: pd.DataFrame,
         feature_pool['vi_count_recent5d'] = 0
 
     # Join labels
-    if not labels_df.empty:
-        feature_pool = feature_pool.merge(labels_df, on=['ticker', 'trade_date'], how='left')
-    else:
-        feature_pool['label'] = None
-        feature_pool['next_day_return'] = None
+    feature_pool = join_labels(feature_pool, labels_df)
 
     # Forward-fill macro and market-level features (not ticker-specific)
     macro_cols = [col for col in feature_pool.columns if col.startswith('index_') or
@@ -756,8 +775,7 @@ def upsert_feature_pool(dsn: str, df: pd.DataFrame) -> None:
             WHERE table_name = 'feature_pool'
         """)
         existing_cols = {row[0] for row in cur.fetchall()}
-        expected_cols = set(df.columns) | {'ticker', 'trade_date'} | set(MACRO_DERIVED_COLUMNS)
-        stale_cols = existing_cols - expected_cols
+        stale_cols = compute_stale_columns(existing_cols, df.columns, MACRO_DERIVED_COLUMNS)
         for col in sorted(stale_cols):
             cur.execute(f"ALTER TABLE feature_pool DROP COLUMN IF EXISTS {col}")
         if stale_cols:
