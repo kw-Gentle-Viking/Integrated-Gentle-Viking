@@ -12,3 +12,4 @@ wandb/
 serving/active_tickers.json
 serving/*.log
 
+training/threshold_vn.json
