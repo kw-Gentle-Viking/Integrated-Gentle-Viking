@@ -78,6 +78,31 @@ def predict(model, dataloader, device) -> tuple[list[int], list[int]]:
     return y_true, y_pred
 
 
+def predict_proba(model, dataloader, device, progress_every: int = 0, log=print):
+    """Like `predict`, but returns (y_true, probs) where probs is a float numpy array [N, 3] of
+    softmax class probabilities (0=buy, 1=hold, 2=sell), in dataloader order. Added for the
+    label-agnostic signal metrics (evaluation.evaluate.compute_signal_metrics). `progress_every`
+    > 0 calls log(msg) every that many batches (long CPU inference runs)."""
+    import numpy as np
+    model.eval()
+    y_true: list[int] = []
+    chunks = []
+    n_batches = len(dataloader) if hasattr(dataloader, "__len__") else None
+    with torch.no_grad():
+        for i, batch in enumerate(dataloader):
+            batch = dict(batch)
+            labels = batch.pop("label")
+            batch = _to_device_batch(batch, device)
+            out = model(batch)
+            logits = out["class_logits"].squeeze(1)
+            chunks.append(torch.softmax(logits, dim=1).cpu().numpy())
+            y_true.extend(labels.squeeze(-1).tolist())
+            if progress_every and (i + 1) % progress_every == 0:
+                log(f"[predict_proba] batch {i + 1}/{n_batches}")
+    probs = np.concatenate(chunks, axis=0) if chunks else np.zeros((0, 3), dtype=np.float32)
+    return y_true, probs
+
+
 def resume_epoch_and_best_loss(checkpoint_state: dict | None) -> tuple[int, float]:
     """Pure decision logic (no I/O): given a loaded epoch-level checkpoint dict (or None if no
     such checkpoint exists yet), return (start_epoch, best_val_loss) to resume training from.
