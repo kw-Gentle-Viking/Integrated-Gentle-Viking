@@ -127,7 +127,15 @@ def run_training(config: dict) -> dict:
     epoch; if that file already exists when run_training starts, training resumes from the next
     epoch instead of epoch 0. Omitting this key (the default) reproduces the exact prior
     behavior -- always starts at epoch 0, never writes an epoch-level checkpoint -- so existing
-    callers (training/run_stage1_search.py's train_and_score) are unaffected."""
+    callers (training/run_stage1_search.py's train_and_score) are unaffected.
+
+    Optional keys (all default to off; with none of them set the behavior is unchanged):
+    early_stopping_patience (int) -- stop once val loss has not strictly improved for that many
+    consecutive epochs; the counter is persisted in the epoch checkpoint ("epochs_since_improve",
+    only written when patience is set) and restored on resume (missing => 0).
+    should_stop (callable -> bool) -- asked after each epoch's checkpoint is saved; True stops the
+    run resumably (stopped_reason "budget"). epoch_log (callable(str)) -- one line per epoch.
+    Returns also stopped_reason in {"max_epochs","early_stopping","budget"} and last_epoch."""
     device = config["device"]
     model = TemporalFusionTransformer(config["tft_config"]).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=config["lr"])
@@ -140,29 +148,61 @@ def run_training(config: dict) -> dict:
         model.load_state_dict(checkpoint_state["model_state_dict"])
         optimizer.load_state_dict(checkpoint_state["optimizer_state_dict"])
     start_epoch, best_val_loss = resume_epoch_and_best_loss(checkpoint_state)
+    # Optional early stopping (default None => behavior and checkpoint contents identical to before).
+    patience = config.get("early_stopping_patience")
+    # Old checkpoints (or runs saved without patience) lack the counter -> resume it as 0.
+    epochs_since_improve = int(checkpoint_state.get("epochs_since_improve", 0)) if checkpoint_state else 0
+    should_stop = config.get("should_stop")      # optional callable, e.g. a wall-clock budget check
+    epoch_log = config.get("epoch_log")          # optional callable(str) for per-epoch liveness lines
     if start_epoch > 0:
         print(f"[run_training] resuming {config['run_name']} from epoch {start_epoch} "
-              f"(best_val_loss so far={best_val_loss:.4f})")
+              f"(best_val_loss so far={best_val_loss:.4f}"
+              f"{'' if patience is None else f', epochs_since_improve={epochs_since_improve}/{patience}'})")
 
     wandb.init(project="ai-gentle-viking-re", name=config["run_name"], config=config.get("wandb_config", {}))
     checkpoint_path = f"{config['checkpoint_dir']}/{config['run_name']}.pt"
+    stopped_reason = "max_epochs"
+    last_epoch = start_epoch - 1
     try:
-        for epoch in range(start_epoch, config["epochs"]):
-            train_loss = train_one_epoch(model, config["train_loader"], optimizer, criterion, device)
-            val_loss = evaluate_loss(model, config["val_loader"], criterion, device)
-            wandb.log({"epoch": epoch, "train_loss": train_loss, "val_loss": val_loss})
-            if val_loss < best_val_loss:
-                best_val_loss = val_loss
-                torch.save(model.state_dict(), checkpoint_path)
-            if epoch_checkpoint_path:
-                torch.save({
-                    "epoch": epoch, "model_state_dict": model.state_dict(),
-                    "optimizer_state_dict": optimizer.state_dict(), "best_val_loss": best_val_loss,
-                }, epoch_checkpoint_path)
+        if patience is not None and epochs_since_improve >= patience:
+            stopped_reason = "early_stopping"   # resumed after the stop had already triggered
+        else:
+            for epoch in range(start_epoch, config["epochs"]):
+                train_loss = train_one_epoch(model, config["train_loader"], optimizer, criterion, device)
+                val_loss = evaluate_loss(model, config["val_loader"], criterion, device)
+                wandb.log({"epoch": epoch, "train_loss": train_loss, "val_loss": val_loss})
+                if val_loss < best_val_loss:
+                    best_val_loss = val_loss
+                    epochs_since_improve = 0
+                    torch.save(model.state_dict(), checkpoint_path)
+                else:
+                    epochs_since_improve += 1
+                if epoch_checkpoint_path:
+                    state = {
+                        "epoch": epoch, "model_state_dict": model.state_dict(),
+                        "optimizer_state_dict": optimizer.state_dict(), "best_val_loss": best_val_loss,
+                    }
+                    if patience is not None:
+                        state["epochs_since_improve"] = epochs_since_improve
+                    torch.save(state, epoch_checkpoint_path)
+                last_epoch = epoch
+                if epoch_log:
+                    epoch_log(f"[run_training] {config['run_name']} epoch {epoch} train_loss={train_loss:.4f} "
+                              f"val_loss={val_loss:.4f} best={best_val_loss:.4f}"
+                              f"{'' if patience is None else f' since_improve={epochs_since_improve}/{patience}'}")
+                if patience is not None and epochs_since_improve >= patience:
+                    stopped_reason = "early_stopping"
+                    break
+                # Budget stop only AFTER the epoch checkpoint is written (=> resumable), and only
+                # if more epochs remain (otherwise the run is simply complete).
+                if should_stop is not None and epoch + 1 < config["epochs"] and should_stop():
+                    stopped_reason = "budget"
+                    break
     finally:
         # Without this, an exception mid-loop (e.g. a CUDA OOM a caller catches and recovers
         # from, as training/run_stage1_search.py's Optuna/ablation loops do across a long
         # unattended multi-trial run) would leave this trial's wandb run un-finished, causing
         # wandb state confusion on the next wandb.init() call later in the same process.
         wandb.finish()
-    return {"best_val_loss": best_val_loss, "checkpoint_path": checkpoint_path}
+    return {"best_val_loss": best_val_loss, "checkpoint_path": checkpoint_path,
+            "stopped_reason": stopped_reason, "last_epoch": last_epoch}
