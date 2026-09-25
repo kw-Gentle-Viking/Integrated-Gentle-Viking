@@ -56,8 +56,14 @@ def upsert_price_daily(dsn: str, rows: list[dict]) -> None:
 
 
 def backfill_ticker(client: KisClient, dsn: str, ticker: str,
-                     start_date: str = "20190102", end_date: str | None = None) -> None:
-    """KIS는 1회 조회당 최대 약 100영업일만 반환하므로 청크 단위로 역순 페이징한다."""
+                     start_date: str = "20190102", end_date: str | None = None,
+                     adjusted: bool = True) -> None:
+    """KIS는 1회 조회당 최대 약 100영업일만 반환하므로 청크 단위로 역순 페이징한다.
+
+    adjusted=True(기본)면 FID_ORG_ADJ_PRC="0" = 수정주가(액면분할/무상증자/유상증자 반영, 거래량도 소급 조정).
+    adjusted=False면 "1" = 원주가(미수정). 2026-09-08 최초 백필은 "1"로 받아 분할 시점마다 가격이
+    점프하는 버그가 있었다 (docs/data_units.md, docs/data_adjustment_report.md 참고)."""
+    adj_flag = "0" if adjusted else "1"
     end_date = end_date or datetime.now().strftime("%Y%m%d")
     cursor_end = datetime.strptime(end_date, "%Y%m%d")
     start = datetime.strptime(start_date, "%Y%m%d")
@@ -69,7 +75,7 @@ def backfill_ticker(client: KisClient, dsn: str, ticker: str,
             params={"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": ticker,
                     "FID_INPUT_DATE_1": cursor_start.strftime("%Y%m%d"),
                     "FID_INPUT_DATE_2": cursor_end.strftime("%Y%m%d"),
-                    "FID_PERIOD_DIV_CODE": "D", "FID_ORG_ADJ_PRC": "1"},
+                    "FID_PERIOD_DIV_CODE": "D", "FID_ORG_ADJ_PRC": adj_flag},
         )
         time.sleep(KIS_API_INTERVAL)  # Respect KIS API rate limit: ~18 calls/sec
         upsert_price_daily(dsn, parse_daily_price_response(raw, ticker))
