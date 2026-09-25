@@ -126,6 +126,12 @@ def parse_args(argv=None) -> argparse.Namespace:
                          "overwriting serving/best_model_state_dict.pt with this run's checkpoint "
                          "(the current serving checkpoint is backed up first). Off by default so a "
                          "sweep-winner retrain never silently replaces the deployed model.")
+    p.add_argument("--align", choices=["legacy", "today"], default="legacy",
+                    help="TickerDayDataset alignment. 'legacy' (default, unchanged behavior): label/future/"
+                         "static from the row AFTER the 60-row encoder -- NOT what serving does. 'today': "
+                         "label from the last encoder row (train/serving consistent). The final retrain "
+                         "must use 'today' later; a non-legacy run gets an '-align-today' run_name suffix "
+                         "and is never auto-promoted to serving without --promote-to-serving.")
     return p.parse_args(argv)
 
 
@@ -148,6 +154,8 @@ def main(argv=None) -> None:
 
     cfg = build_stage2_config(champion, today)
     cfg["run_name"] = stage2_run_name(cfg["run_name"], args.weight_scheme)
+    if args.align != "legacy":
+        cfg["run_name"] += f"-align-{args.align}"
     logger.info("Stage-2 config: train_start=%s train_end=%s run_name=%s weight_scheme=%s",
                 cfg["train_start"], cfg["train_end"], cfg["run_name"], args.weight_scheme)
 
@@ -163,15 +171,20 @@ def main(argv=None) -> None:
         cache_path=f"{ARTIFACTS_DIR}/stage2_cache_full_{cfg['train_start']}_{cfg['train_end']}.pkl")
 
     train_ticker_dfs, held_out_ticker_dfs, held_out_dates = split_held_out_by_trading_days(
-        full_ticker_dfs, N_HELD_OUT_DAYS, ENCODER_LEN)
+        full_ticker_dfs, N_HELD_OUT_DAYS,
+        # 'today' windows end AT the target row, so the held-out buffer must be one row shorter or the
+        # earliest window would target a train-date row.
+        ENCODER_LEN if args.align == "legacy" else ENCODER_LEN - 1)
     n_leverage_days = sum(1 for d in held_out_dates if str(d) >= LEVERAGE_START)
     n_pre_leverage_days = len(held_out_dates) - n_leverage_days
     logger.info("Held-out window: %s..%s (%d global trading days: %d pre_leverage, %d leverage_era)",
                 held_out_dates[0], held_out_dates[-1], len(held_out_dates),
                 n_pre_leverage_days, n_leverage_days)
 
-    train_ds = TickerDayDataset(train_ticker_dfs, cfg["columns"], KNOWN_FUTURE_COLS, STATIC_COLS, ENCODER_LEN)
-    held_out_ds = TickerDayDataset(held_out_ticker_dfs, cfg["columns"], KNOWN_FUTURE_COLS, STATIC_COLS, ENCODER_LEN)
+    train_ds = TickerDayDataset(train_ticker_dfs, cfg["columns"], KNOWN_FUTURE_COLS, STATIC_COLS, ENCODER_LEN,
+                                align=args.align)
+    held_out_ds = TickerDayDataset(held_out_ticker_dfs, cfg["columns"], KNOWN_FUTURE_COLS, STATIC_COLS,
+                                   ENCODER_LEN, align=args.align)
     logger.info("train samples=%d held_out samples=%d", len(train_ds), len(held_out_ds))
 
     # Class weights from the actual TRAINING portion only (excludes the held-out slice) -- the
@@ -230,6 +243,8 @@ def main(argv=None) -> None:
     logger.info("Confusion matrix: %s", metrics["confusion_matrix"])
 
     plan = promotion_plan(args.weight_scheme, args.promote_to_serving)
+    if args.align != "legacy" and not args.promote_to_serving:
+        plan = {**plan, "promote": False}   # never auto-promote a non-legacy-aligned run
     if plan["promote"]:
         os.makedirs(SERVING_DIR, exist_ok=True)
         promote_to_serving(result["checkpoint_path"], SERVING_CHECKPOINT_PATH,

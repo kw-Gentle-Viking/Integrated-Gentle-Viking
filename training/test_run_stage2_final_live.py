@@ -19,3 +19,10 @@ def test_weight_scheme_accepts_the_three_schemes_and_rejects_others():
 
 def test_promote_flag_is_explicit_opt_in():
     assert parse_args(["--weight-scheme", "mild", "--promote-to-serving"]).promote_to_serving is True
+
+
+def test_align_defaults_to_legacy_and_accepts_today_only():
+    assert parse_args([]).align == "legacy"
+    assert parse_args(["--align", "today"]).align == "today"
+    with pytest.raises(SystemExit):
+        parse_args(["--align", "bogus"])
