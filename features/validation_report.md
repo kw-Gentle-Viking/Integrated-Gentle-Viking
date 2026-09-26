@@ -1,9 +1,9 @@
 # Feature Pool Validation Report
-Generated: 2026-09-09 09:27:54
+Generated: 2026-09-26 10:53:26
 
 ## Summary
 - feature_pool rows: 376,682
-- Columns: 61
+- Columns: 74
 - Tickers: 200
 - Date range: 2019-01-02 to 2026-09-08
 
@@ -17,7 +17,12 @@ Generated: 2026-09-09 09:27:54
 ✓ All values within expected ranges
 
 ### Null Rates
-✓ All columns within acceptable null rate (< 50%)
+**High null rate columns (> 50%): 5**
+  - is_dividend: 95.4%
+  - is_bonus_issue: 95.4%
+  - is_split: 95.4%
+  - is_rights_offering: 95.4%
+  - is_reverse_split: 95.4%
 
 ### Trading Day Gaps
 **Tickers with insufficient days (< 1804): 1**
@@ -26,9 +31,9 @@ Generated: 2026-09-09 09:27:54
 ### Label Completeness
 - Label null rate: 0.1%
 - Label distribution:
-  - 1.0: 180,597 rows
-  - 2.0: 101,064 rows
-  - 0.0: 94,821 rows
+  - 1.0: 180,615 rows
+  - 2.0: 101,010 rows
+  - 0.0: 94,857 rows
 
 ### Technical Indicators
 ✓ All technical indicators present
@@ -40,4 +45,4 @@ Generated: 2026-09-09 09:27:54
 - est_rebalancing_flow: 0 non-zero values out of 376,682 (0.0%)
 
 ## Overall Status
-⚠ **Found 1 issue(s). Review details above.**
+⚠ **Found 6 issue(s). Review details above.**

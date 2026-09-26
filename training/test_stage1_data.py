@@ -120,12 +120,13 @@ def test_load_or_build_uses_label_specific_cache_and_default_cache(tmp_path, mon
                         pd.DataFrame({"ticker": ["A"], "trade_date": ["2019-01-02"], "label": [1]}))
     monkeypatch.setattr(sd, "build_ticker_dfs", lambda df, label_col="label": {"A": df})
     base = str(tmp_path / "c.pkl")
-    sd.load_or_build_ticker_dfs("dsn", "s", "e", base)                      # writes c.pkl
-    sd.load_or_build_ticker_dfs("dsn", "s", "e", base, label_col="label_vn")  # writes c__label_vn.pkl
+    sd.load_or_build_ticker_dfs("dsn", "s", "e", base)                      # writes c__<ver>.pkl
+    sd.load_or_build_ticker_dfs("dsn", "s", "e", base, label_col="label_vn")  # writes c__label_vn__<ver>.pkl
     sd.load_or_build_ticker_dfs("dsn", "s", "e", base)                      # cache hit
     sd.load_or_build_ticker_dfs("dsn", "s", "e", base, label_col="label_vn")  # cache hit
     assert calls == ["label", "label_vn"]
-    assert sorted(p.name for p in tmp_path.iterdir()) == ["c.pkl", "c__label_vn.pkl"]
+    v = sd.DATA_VERSION
+    assert sorted(p.name for p in tmp_path.iterdir()) == sorted([f"c__{v}.pkl", f"c__label_vn__{v}.pkl"])
 
 
 def test_build_ticker_dfs_renames_raw_label_col_to_label():
@@ -141,3 +142,23 @@ def test_build_ticker_dfs_default_unchanged_and_aliased_frame_ok():
     df = pd.DataFrame({"ticker": ["A"], "trade_date": ["2019-01-02"], "x": [1.0], "label": [1]})
     assert sd.build_ticker_dfs(df)["A"]["label"].iloc[0] == 1.0
     assert sd.build_ticker_dfs(df, label_col="label_vn")["A"]["label"].iloc[0] == 1.0
+
+
+def test_data_version_is_set_and_folded_into_effective_cache_path():
+    assert sd.DATA_VERSION == "adj1"
+    p = "training/artifacts/stage1_cache_train_2019-01-02_2023-12-31.pkl"
+    assert sd.versioned_cache_path(p, "label") == "training/artifacts/stage1_cache_train_2019-01-02_2023-12-31__adj1.pkl"
+    assert sd.versioned_cache_path(p, "label_vn") == "training/artifacts/stage1_cache_train_2019-01-02_2023-12-31__label_vn__adj1.pkl"
+
+
+def test_unversioned_legacy_cache_is_never_served(tmp_path, monkeypatch):
+    """A pre-adjustment pickle at the bare path must be ignored: the DB is re-queried."""
+    import pickle
+    base = tmp_path / "c.pkl"
+    with open(base, "wb") as f:
+        pickle.dump({"STALE": None}, f)
+    monkeypatch.setattr(sd, "query_feature_pool", lambda dsn, s, e, label_col="label":
+                        pd.DataFrame({"ticker": ["A"], "trade_date": ["2019-01-02"], "label": [1]}))
+    monkeypatch.setattr(sd, "build_ticker_dfs", lambda df, label_col="label": {"FRESH": df})
+    out = sd.load_or_build_ticker_dfs("dsn", "s", "e", str(base))
+    assert list(out) == ["FRESH"]

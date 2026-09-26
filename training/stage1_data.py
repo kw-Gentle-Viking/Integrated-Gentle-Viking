@@ -50,6 +50,19 @@ def resolve_cache_path(cache_path: str, label_col: str = "label") -> str:
     return f"{stem}__{label_col}{ext}"
 
 
+# Bump when feature_pool/labels are rebuilt from different underlying data. Folded into every
+# cache filename so pickles built from older data are never silently served.
+# "adj1" = price_daily re-backfilled with KIS adjusted prices (2026-09-26); the pre-adjustment
+# caches were moved to training/artifacts/old_unadj_caches/.
+DATA_VERSION = "adj1"
+
+
+def versioned_cache_path(cache_path: str, label_col: str = "label") -> str:
+    """Effective on-disk cache path: label-specific naming (resolve_cache_path) + DATA_VERSION suffix."""
+    stem, ext = os.path.splitext(resolve_cache_path(cache_path, label_col))
+    return f"{stem}__{DATA_VERSION}{ext}"
+
+
 def query_feature_pool(dsn: str, start_date: str, end_date: str, label_col: str = "label") -> pd.DataFrame:
     """Query feature_pool for HISTORICAL_COLS_DEFAULT + the DB-backed future cols + STATIC_COLS
     + label, across the full ticker universe, for one date range.
@@ -120,7 +133,7 @@ def load_or_build_ticker_dfs(dsn: str, start_date: str, end_date: str, cache_pat
     pipeline (unlike TickerDayDataset construction, which is cheap and must be rebuilt per
     ablation config since the column subset changes) -- cache it to disk so 20 Optuna trials +
     7 ablation runs don't each re-run the same ~250k-row query."""
-    cache_path = resolve_cache_path(cache_path, label_col)
+    cache_path = versioned_cache_path(cache_path, label_col)
     if os.path.exists(cache_path):
         logger.info("Loading cached ticker dataframes from %s", cache_path)
         with open(cache_path, "rb") as f:
