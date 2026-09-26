@@ -38,6 +38,7 @@ Output paths are overridable (--artifacts-dir / --results-path / --doc-path / --
 so dry runs never touch the real ones.
 """
 import argparse
+import hashlib
 import json
 import logging
 import math
@@ -361,13 +362,68 @@ class RealData:
 # --------------------------------------------------------------------------------------------
 # recipe execution
 # --------------------------------------------------------------------------------------------
+THRESHOLD_FILES = {"label": "threshold.json", "label_vn": "threshold_vn.json"}
+TRAINING_DIR = os.path.dirname(os.path.abspath(__file__))
+# fingerprint keys computable without loading data (used for the cheap skip-check of recorded results)
+CHEAP_FP_KEYS = ("align", "data_version", "seed", "hparams", "threshold", "label_col", "batch_size", "preprocessed")
+
+
+def columns_hash(cols) -> str:
+    return hashlib.sha256(json.dumps(list(cols)).encode()).hexdigest()[:16]
+
+
+def file_sha256(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def read_threshold(label_col: str, training_dir: str = TRAINING_DIR) -> dict:
+    """The label-threshold parameters this recipe's label was derived with (timestamps excluded)."""
+    path = os.path.join(training_dir, THRESHOLD_FILES[label_col])
+    try:
+        with open(path) as f:
+            d = json.load(f)
+    except (OSError, ValueError):
+        return {"file": THRESHOLD_FILES[label_col], "error": "unreadable"}
+    return {"file": THRESHOLD_FILES[label_col],
+            **{k: v for k, v in d.items() if k not in ("timestamp", "computed_on")}}
+
+
+def cheap_fingerprint(name: str, opts: dict) -> dict:
+    from training.stage1_data import DATA_VERSION
+    spec = RECIPES[name]
+    return json.loads(json.dumps({
+        "align": opts.get("align", DEFAULT_ALIGN), "data_version": DATA_VERSION, "seed": opts.get("seed", 0),
+        "hparams": opts["hparams"], "batch_size": opts["batch_size"], "label_col": spec["label_col"],
+        "preprocessed": spec["preprocess"],
+        "threshold": read_threshold(spec["label_col"], opts.get("threshold_dir", TRAINING_DIR))}, sort_keys=True))
+
+
+def full_fingerprint(name: str, opts: dict, cols, class_weights) -> dict:
+    fp = cheap_fingerprint(name, opts)
+    fp["columns_hash"] = columns_hash(cols)
+    fp["class_weights"] = [round(float(w), 6) for w in class_weights]
+    return fp
+
+
+def fingerprint_mismatch(recorded: dict | None, current: dict) -> list[str]:
+    """Keys (of `current`) whose recorded value differs; a missing fingerprint mismatches on everything."""
+    if not recorded:
+        return sorted(current)
+    return sorted(k for k in current if recorded.get(k) != current[k])
+
+
 def _git_commit() -> str:
     try:
         sha = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], text=True).strip()
         dirty = subprocess.check_output(
             ["git", "status", "--porcelain", "--", "training/run_tfx_experiments.py", "training/preprocess.py",
              "training/train.py", "training/tabular_features.py", "training/stage1_data.py",
-             "training/signal_data.py", "evaluation/evaluate.py"], text=True).strip()
+             "training/signal_data.py", "training/dataset.py", "training/config.py", "training/label.py",
+             "evaluation/evaluate.py"], text=True).strip()
         return sha + ("+dirty" if dirty else "")
     except Exception:  # noqa: BLE001
         return "unknown"
@@ -510,8 +566,10 @@ def run_recipe(name: str, data, opts: dict, budget) -> dict | None:
     prep = prepare_recipe(name, data, opts)
     cols = prep["kept_columns"]
     art_dir = opts["artifacts_dir"]
+    preproc_path = None
     if prep["artifact"] is not None:
-        pp.save_preprocessor(prep["artifact"], os.path.join(art_dir, f"preproc_{name}.json"))
+        preproc_path = os.path.join(art_dir, f"preproc_{name}.json")
+        pp.save_preprocessor(prep["artifact"], preproc_path)
 
     # Structural assertions first (fail fast, before hours of training).
     eval_ds = {w: build_window_dataset(w, prep["eval_frames"][w], cols, opts) for w in EVAL_WINDOWS}
@@ -530,6 +588,7 @@ def run_recipe(name: str, data, opts: dict, budget) -> dict | None:
         {"historical": cols, "future": KNOWN_FUTURE_COLS, "static_cardinalities": STATIC_CARDINALITIES},
         num_classes=3, state_size=hp["state_size"], attention_heads=hp["attention_heads"],
         lstm_layers=hp["lstm_layers"], dropout=hp["dropout"])
+    fingerprint = full_fingerprint(name, opts, cols, class_weights.tolist())
     ckpt_dir = os.path.join(art_dir, "checkpoints")
     os.makedirs(ckpt_dir, exist_ok=True)
     run_name = f"tfx-{name}"
@@ -541,6 +600,7 @@ def run_recipe(name: str, data, opts: dict, budget) -> dict | None:
         "epoch_checkpoint_path": os.path.join(ckpt_dir, f"{run_name}_inprogress.pt"),
         "early_stopping_patience": opts["patience"],
         "should_stop": budget.exceeded, "epoch_log": logger.info,
+        "fingerprint": fingerprint, "seed": opts.get("seed", 0),
         "wandb_config": {**hp, "recipe": name, "label_col": RECIPES[name]["label_col"], "n_inputs": len(cols)},
     })
     if result["stopped_reason"] == "budget":
@@ -551,7 +611,16 @@ def run_recipe(name: str, data, opts: dict, budget) -> dict | None:
 
     model = TemporalFusionTransformer(tft_config).to(device)
     model.load_state_dict(torch.load(result["checkpoint_path"], map_location=device))
+    meta = {
+        "seed": opts.get("seed", 0), "data_version": fingerprint["data_version"], "threshold": fingerprint["threshold"],
+        "columns_hash": fingerprint["columns_hash"],
+        "preproc": ({"path": preproc_path, "sha256": file_sha256(preproc_path)} if preproc_path else None),
+        "resumed": result["resumed"], "resume_count": result["resume_count"], "resumed_from_epoch": result["start_epoch"],
+        "stale_inprogress_ignored": result["stale_checkpoint"],
+        "torch": torch.__version__, "cuda": torch.version.cuda, "device": str(device),
+    }
     rec = {
+        "fingerprint": fingerprint, "meta": meta,
         "recipe": name, "tag": RECIPES[name]["tag"], "label_col": RECIPES[name]["label_col"], "align": align,
         "hparams": hp, "batch_size": opts["batch_size"], "max_epochs": opts["epochs"], "patience": opts["patience"],
         "train": {
@@ -600,7 +669,8 @@ def parse_args(argv=None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--recipes", nargs="+", default=list(RECIPES), choices=list(RECIPES))
     p.add_argument("--max-minutes", type=float, default=600.0)
-    p.add_argument("--artifacts-dir", default=ARTIFACTS_DIR, help="checkpoints + preproc artifacts + results JSON")
+    p.add_argument("--artifacts-dir", default=None,
+                   help=f"checkpoints + preproc artifacts + results JSON (default {ARTIFACTS_DIR}; REQUIRED with --max-tickers)")
     p.add_argument("--results-path", default=None, help="default: <artifacts-dir>/tfx_results.json")
     p.add_argument("--doc-path", default=DOC_PATH)
     p.add_argument("--model-versions-path", default=MODEL_VERSIONS_PATH)
@@ -618,7 +688,13 @@ def parse_args(argv=None) -> argparse.Namespace:
                         "S3/E0 sample sets (36729 / 33364) via --check-windows")
     p.add_argument("--check-windows", action="store_true",
                    help="only build the val/OOT sample sets for the given recipes and assert counts (no training)")
-    return p.parse_args(argv)
+    args = p.parse_args(argv)
+    if args.max_tickers and args.artifacts_dir is None:
+        p.error("--max-tickers (dry run) requires an explicit --artifacts-dir so the real preproc/checkpoint "
+                "artifacts are not overwritten with subsampled ones")
+    if args.artifacts_dir is None:
+        args.artifacts_dir = ARTIFACTS_DIR
+    return args
 
 
 def main(argv=None, data=None) -> int:
@@ -665,9 +741,15 @@ def main(argv=None, data=None) -> int:
 
     for name in args.recipes:
         if name in results:
-            logger.info("[%s] already recorded in %s -- skipping", name, results_path)
-            record_model_version(name, results[name], args.model_versions_path)   # heal a missed row
-            continue
+            bad = fingerprint_mismatch(results[name].get("fingerprint"), cheap_fingerprint(name, opts))
+            if not bad:
+                logger.info("[%s] already recorded in %s -- skipping", name, results_path)
+                record_model_version(name, results[name], args.model_versions_path)   # heal a missed row
+                continue
+            logger.warning("[%s] recorded result's fingerprint differs from the current setup (%s) -- "
+                           "moving it to %s.stale.%s.json and re-running", name, ", ".join(bad), results_path, name)
+            save_results_atomic(f"{results_path}.stale.{name}.json", {name: results.pop(name)})
+            save_results_atomic(results_path, results)
         if budget.exceeded():
             logger.info("time budget exhausted; not starting recipe %s this invocation.", name)
             break

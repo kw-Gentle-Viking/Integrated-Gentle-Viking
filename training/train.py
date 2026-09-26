@@ -135,6 +135,9 @@ def run_training(config: dict) -> dict:
     only written when patience is set) and restored on resume (missing => 0).
     should_stop (callable -> bool) -- asked after each epoch's checkpoint is saved; True stops the
     run resumably (stopped_reason "budget"). epoch_log (callable(str)) -- one line per epoch.
+    fingerprint (dict) -- stored in the epoch checkpoint; a checkpoint whose fingerprint differs (or is
+    missing) is renamed "<path>.stale" and ignored (start from epoch 0). seed (int) -- reseed torch before
+    each epoch with seed+epoch so a resumed epoch reproduces the shuffle an uninterrupted run would have.
     Returns also stopped_reason in {"max_epochs","early_stopping","budget"} and last_epoch."""
     device = config["device"]
     model = TemporalFusionTransformer(config["tft_config"]).to(device)
@@ -142,12 +145,24 @@ def run_training(config: dict) -> dict:
     criterion = torch.nn.CrossEntropyLoss(weight=config["class_weights"].to(device))
 
     epoch_checkpoint_path = config.get("epoch_checkpoint_path")
+    fingerprint = config.get("fingerprint")     # optional JSON-able dict identifying the run's inputs
     checkpoint_state = None
+    stale_path = None
     if epoch_checkpoint_path and os.path.exists(epoch_checkpoint_path):
         checkpoint_state = torch.load(epoch_checkpoint_path, map_location=device)
+        if fingerprint is not None and checkpoint_state.get("fingerprint") != fingerprint:
+            # In-progress state from a different data/config: never resume from it.
+            stale_path = epoch_checkpoint_path + ".stale"
+            os.replace(epoch_checkpoint_path, stale_path)
+            print(f"[run_training] {config['run_name']}: in-progress checkpoint fingerprint MISMATCH -- "
+                  f"ignoring it (renamed to {stale_path}) and starting from epoch 0")
+            checkpoint_state = None
+    if checkpoint_state is not None:
         model.load_state_dict(checkpoint_state["model_state_dict"])
         optimizer.load_state_dict(checkpoint_state["optimizer_state_dict"])
     start_epoch, best_val_loss = resume_epoch_and_best_loss(checkpoint_state)
+    resume_count = (int(checkpoint_state.get("resume_count", 0)) + 1) if checkpoint_state else 0
+    seed = config.get("seed")                    # optional: per-epoch shuffle seed = seed + epoch
     # Optional early stopping (default None => behavior and checkpoint contents identical to before).
     patience = config.get("early_stopping_patience")
     # Old checkpoints (or runs saved without patience) lack the counter -> resume it as 0.
@@ -168,6 +183,9 @@ def run_training(config: dict) -> dict:
             stopped_reason = "early_stopping"   # resumed after the stop had already triggered
         else:
             for epoch in range(start_epoch, config["epochs"]):
+                if seed is not None:
+                    # Epoch-specific shuffle: a resumed run's first epoch must not replay epoch 0's order.
+                    torch.manual_seed(seed + epoch)
                 train_loss = train_one_epoch(model, config["train_loader"], optimizer, criterion, device)
                 val_loss = evaluate_loss(model, config["val_loader"], criterion, device)
                 wandb.log({"epoch": epoch, "train_loss": train_loss, "val_loss": val_loss})
@@ -182,6 +200,9 @@ def run_training(config: dict) -> dict:
                         "epoch": epoch, "model_state_dict": model.state_dict(),
                         "optimizer_state_dict": optimizer.state_dict(), "best_val_loss": best_val_loss,
                     }
+                    if fingerprint is not None:      # new keys only when opted in (default files unchanged)
+                        state["fingerprint"] = fingerprint
+                        state["resume_count"] = resume_count
                     if patience is not None:
                         state["epochs_since_improve"] = epochs_since_improve
                     torch.save(state, epoch_checkpoint_path)
@@ -205,4 +226,6 @@ def run_training(config: dict) -> dict:
         # wandb state confusion on the next wandb.init() call later in the same process.
         wandb.finish()
     return {"best_val_loss": best_val_loss, "checkpoint_path": checkpoint_path,
-            "stopped_reason": stopped_reason, "last_epoch": last_epoch}
+            "stopped_reason": stopped_reason, "last_epoch": last_epoch,
+            "resumed": start_epoch > 0, "resume_count": resume_count, "start_epoch": start_epoch,
+            "stale_checkpoint": stale_path}

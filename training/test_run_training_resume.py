@@ -86,3 +86,65 @@ def test_interrupted_run_resumes_from_next_epoch_not_from_scratch(tmp_path, monk
     assert (tmp_path / "resume-test.pt").exists()
     final = torch.load(tmp_path / "resume-test_inprogress.pt", map_location="cpu")
     assert final["epoch"] == epochs - 1
+
+
+def _interrupt_after_epoch0(tmp_path, monkeypatch, **extra):
+    real_eval = train_mod.evaluate_loss
+    calls = {"n": 0}
+
+    def flaky(*a, **k):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise RuntimeError("simulated interruption")
+        return real_eval(*a, **k)
+
+    monkeypatch.setattr(train_mod, "evaluate_loss", flaky)
+    with pytest.raises(RuntimeError):
+        train_mod.run_training({**_config(tmp_path, 3), **extra})
+    monkeypatch.setattr(train_mod, "evaluate_loss", real_eval)
+
+
+def test_matching_fingerprint_resumes_and_records_resume_meta(tmp_path, monkeypatch):
+    monkeypatch.setenv("WANDB_MODE", "disabled")
+    fp = {"align": "today", "columns_hash": "abc"}
+    _interrupt_after_epoch0(tmp_path, monkeypatch, fingerprint=fp, seed=5)
+    assert torch.load(tmp_path / "resume-test_inprogress.pt", map_location="cpu")["fingerprint"] == fp
+    res = train_mod.run_training({**_config(tmp_path, 3), "fingerprint": fp, "seed": 5})
+    assert res["resumed"] and res["start_epoch"] == 1 and res["resume_count"] == 1 and res["stale_checkpoint"] is None
+
+
+def test_fingerprint_mismatch_marks_inprogress_stale_and_restarts_from_scratch(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("WANDB_MODE", "disabled")
+    _interrupt_after_epoch0(tmp_path, monkeypatch, fingerprint={"columns_hash": "old"})
+    real_train, n = train_mod.train_one_epoch, {"n": 0}
+    monkeypatch.setattr(train_mod, "train_one_epoch", lambda *a, **k: (n.__setitem__("n", n["n"] + 1), real_train(*a, **k))[1])
+    res = train_mod.run_training({**_config(tmp_path, 3), "fingerprint": {"columns_hash": "new"}})
+    assert n["n"] == 3 and not res["resumed"] and res["start_epoch"] == 0
+    assert res["stale_checkpoint"].endswith(".stale") and (tmp_path / "resume-test_inprogress.pt.stale").exists()
+    assert "MISMATCH" in capsys.readouterr().out
+    assert torch.load(tmp_path / "resume-test_inprogress.pt", map_location="cpu")["fingerprint"] == {"columns_hash": "new"}
+
+
+def test_checkpoint_without_fingerprint_is_stale_when_config_has_one(tmp_path, monkeypatch):
+    monkeypatch.setenv("WANDB_MODE", "disabled")
+    _interrupt_after_epoch0(tmp_path, monkeypatch)          # legacy checkpoint: no fingerprint
+    res = train_mod.run_training({**_config(tmp_path, 3), "fingerprint": {"x": 1}})
+    assert res["start_epoch"] == 0 and res["stale_checkpoint"]
+
+
+def test_epoch_seed_makes_shuffle_depend_on_epoch_not_on_resume(tmp_path, monkeypatch):
+    monkeypatch.setenv("WANDB_MODE", "disabled")
+    seen = []
+    monkeypatch.setattr(train_mod, "train_one_epoch",
+                        lambda *a, **k: (seen.append(torch.rand(1).item()), 0.0)[1])
+    monkeypatch.setattr(train_mod, "evaluate_loss", lambda *a, **k: 1.0)
+    train_mod.run_training({**_config(tmp_path, 2), "seed": 7})
+    full = list(seen)
+    assert full[0] != full[1]                       # epoch 1 does not replay epoch 0's RNG stream
+    # resume at epoch 1 (state saved by the run above) must draw exactly epoch 1's stream
+    st = torch.load(tmp_path / "resume-test_inprogress.pt", map_location="cpu")
+    st["epoch"] = 0
+    torch.save(st, tmp_path / "resume-test_inprogress.pt")
+    seen.clear()
+    train_mod.run_training({**_config(tmp_path, 2), "seed": 7})
+    assert seen == [full[1]]

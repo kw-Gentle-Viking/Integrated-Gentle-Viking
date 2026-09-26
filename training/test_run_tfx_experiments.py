@@ -274,3 +274,88 @@ def test_recipes_filter_only_runs_requested(tmp_path, monkeypatch, small_min_nam
     data.expected_samples = _expected_counts(data)
     tfx.main(_args(tmp_path, "--recipes", "std_vn"), data=data)
     assert set(json.load(open(tmp_path / "art" / "tfx_results.json"))) == {"std_vn"}
+
+
+# ---------------- fingerprint / meta / dry-run guard ----------------
+def test_max_tickers_requires_explicit_artifacts_dir(tmp_path):
+    with pytest.raises(SystemExit):
+        tfx.parse_args(["--max-tickers", "3"])
+    assert tfx.parse_args(["--max-tickers", "3", "--artifacts-dir", str(tmp_path)]).artifacts_dir == str(tmp_path)
+    assert tfx.parse_args([]).artifacts_dir == tfx.ARTIFACTS_DIR
+
+
+def test_fingerprint_helpers():
+    opts = {"hparams": {"lr": 1e-3}, "batch_size": 8, "seed": 3, "align": "today"}
+    fp = tfx.full_fingerprint("std_vn", opts, ["a", "b"], [1.0, 2.0, 3.0])
+    assert fp["label_col"] == "label_vn" and fp["threshold"]["file"] == "threshold_vn.json" and "k" in fp["threshold"]
+    assert tfx.full_fingerprint("std", opts, ["a", "b"], [1, 2, 3])["threshold"]["file"] == "threshold.json"
+    assert fp["columns_hash"] != tfx.full_fingerprint("std_vn", opts, ["b", "a"], [1, 2, 3])["columns_hash"]
+    assert tfx.fingerprint_mismatch(fp, fp) == []
+    assert tfx.fingerprint_mismatch(None, fp) == sorted(fp)
+    assert tfx.fingerprint_mismatch(fp, {**fp, "seed": 4}) == ["seed"]
+
+
+def test_meta_and_fingerprint_recorded_and_stale_inprogress_and_result_are_handled(tmp_path, monkeypatch, small_min_names):
+    import hashlib
+    data = FakeData()
+    data.expected_samples = _expected_counts(data)
+    assert tfx.main(_args(tmp_path, "--recipes", "std", "--seed", "3"), data=data) == 0
+    art = tmp_path / "art"
+    res = json.load(open(art / "tfx_results.json"))
+    r = res["std"]
+    m = r["meta"]
+    assert m["seed"] == 3 and m["data_version"] == r["fingerprint"]["data_version"] and m["threshold"]["file"] == "threshold.json"
+    assert m["columns_hash"] == tfx.columns_hash(r["train"]["kept_columns"]) == r["fingerprint"]["columns_hash"]
+    assert m["preproc"]["sha256"] == hashlib.sha256((art / "preproc_std.json").read_bytes()).hexdigest()
+    assert m["resumed"] is False and m["resume_count"] == 0 and m["torch"] and "cuda" in m
+    assert r["fingerprint"]["class_weights"] == [round(w, 6) for w in r["train"]["class_weights"]]
+
+    # same setup -> skipped (no training)
+    import training.train as train_mod
+    real, calls = train_mod.train_one_epoch, {"n": 0}
+    monkeypatch.setattr(train_mod, "train_one_epoch", lambda *a, **k: (calls.__setitem__("n", calls["n"] + 1), real(*a, **k))[1])
+    tfx.main(_args(tmp_path, "--recipes", "std", "--seed", "3"), data=data)
+    assert calls["n"] == 0
+    # different seed -> recorded result is stale: moved aside and re-run
+    tfx.main(_args(tmp_path, "--recipes", "std", "--seed", "4"), data=data)
+    assert calls["n"] == 2
+    assert (art / "tfx_results.json.stale.std.json").exists()
+    assert json.load(open(art / "tfx_results.json"))["std"]["meta"]["seed"] == 4
+
+
+def test_resume_meta_and_stale_inprogress_on_changed_columns(tmp_path, monkeypatch, small_min_names):
+    import training.run_stage1_search as rss
+    data = FakeData()
+    data.expected_samples = _expected_counts(data)
+    seq = iter([False, True])
+    monkeypatch.setattr(rss, "Budget", type("SB", (), {"__init__": lambda s, *_: None, "exceeded": lambda s: next(seq, False)}))
+    tfx.main(_args(tmp_path, "--recipes", "aligned"), data=data)
+    ck = tmp_path / "art" / "checkpoints" / "tfx-aligned_inprogress.pt"
+    assert ck.exists()
+    # resume with an identical setup -> meta says resumed
+    monkeypatch.setattr(rss, "Budget", lambda *_: type("B", (), {"exceeded": lambda self: False})())
+    tfx.main(_args(tmp_path, "--recipes", "aligned"), data=data)
+    m = json.load(open(tmp_path / "art" / "tfx_results.json"))["aligned"]["meta"]
+    assert m["resumed"] is True and m["resume_count"] == 1 and m["resumed_from_epoch"] == 1
+
+    # interrupted again, but the data version changes between runs -> in-progress ignored (.stale)
+    (tmp_path / "art" / "tfx_results.json").unlink()
+    monkeypatch.setattr(rss, "Budget", type("SB", (), {"__init__": lambda s, *_: None, "exceeded": lambda s: next(seq, False)}))
+    seq2 = iter([False, True])
+    monkeypatch.setattr(rss, "Budget", type("SB2", (), {"__init__": lambda s, *_: None, "exceeded": lambda s: next(seq2, False)}))
+    tfx.main(_args(tmp_path, "--recipes", "aligned"), data=data)
+    assert ck.exists()
+    import training.stage1_data as sd
+    monkeypatch.setattr(sd, "DATA_VERSION", "adj2")
+    monkeypatch.setattr(rss, "Budget", lambda *_: type("B", (), {"exceeded": lambda self: False})())
+    tfx.main(_args(tmp_path, "--recipes", "aligned"), data=data)
+    assert (ck.parent / "tfx-aligned_inprogress.pt.stale").exists()
+    m = json.load(open(tmp_path / "art" / "tfx_results.json"))["aligned"]["meta"]
+    assert m["resumed"] is False and m["data_version"] == "adj2" and m["stale_inprogress_ignored"]
+
+
+def test_git_dirty_check_covers_data_and_label_files():
+    import inspect
+    src = inspect.getsource(tfx._git_commit)
+    for f in ("dataset.py", "config.py", "label.py", "preprocess.py", "train.py"):
+        assert f"training/{f}" in src
