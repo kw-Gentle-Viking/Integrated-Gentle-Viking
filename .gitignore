@@ -13,3 +13,4 @@ serving/active_tickers.json
 serving/*.log
 
 training/threshold_vn.json
+.claude/settings.local.json
