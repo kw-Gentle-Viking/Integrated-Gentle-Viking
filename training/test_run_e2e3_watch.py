@@ -68,8 +68,12 @@ def _run_watcher(tmp_path, py_body, extra_env=None, nvsmi=NVSMI_OK):
     return subprocess.run(["bash", SCRIPT], env=env, capture_output=True, text=True, timeout=60), wt
 
 
+ALL_11_JSON = ('{"e3_seed1":{},"e3_seed2":{},"v4_lr_do":{},"v1_lr":{},"v2_do":{},"v3_wd":{},"v5_lr_do_wd":{},'
+              '"v3_wd_seed1":{},"v4_lr_do_seed1":{},"v3_wd_seed2":{},"v4_lr_do_seed2":{}}')
+
+
 def test_watcher_completes_when_runner_records_all_recipes(tmp_path):
-    body = ('echo \'{"e3_seed1":{},"e3_seed2":{},"v4_lr_do":{},"v1_lr":{},"v2_do":{},"v3_wd":{},"v5_lr_do_wd":{}}\' > "$RESULTS"\nexit 0\n')
+    body = f'echo \'{ALL_11_JSON}\' > "$RESULTS"\nexit 0\n'
     r, _ = _run_watcher(tmp_path, body)
     assert r.returncode == 0 and "e2e3 experiments COMPLETE" in r.stdout
     assert "utilization=0% x3" in r.stdout
@@ -84,7 +88,7 @@ def test_watcher_cools_down_and_resumes_after_signal_kill(tmp_path):
     counter = tmp_path / "count"
     body = (f'n=$(cat "{counter}" 2>/dev/null || echo 0); echo $((n+1)) > "{counter}"\n'
             'if [ "$n" -eq 0 ]; then exit 143; fi\n'
-            'echo \'{"e3_seed1":{},"e3_seed2":{},"v4_lr_do":{},"v1_lr":{},"v2_do":{},"v3_wd":{},"v5_lr_do_wd":{}}\' > "$RESULTS"\nexit 0\n')
+            f'echo \'{ALL_11_JSON}\' > "$RESULTS"\nexit 0\n')
     r, _ = _run_watcher(tmp_path, body)
     assert r.returncode == 0 and "Killed by user signal (rc=143)" in r.stdout and "COMPLETE" in r.stdout
     assert "Quick failure" not in r.stdout
@@ -151,6 +155,7 @@ def test_sigint_130_is_a_user_kill(tmp_path):
 def test_default_recipe_list_and_results_file_and_runner():
     r = subprocess.run(["bash", "-c", f'source "{SCRIPT}"; echo "$RECIPES|$RESULTS"'], capture_output=True, text=True,
                        timeout=20, env={k: v for k, v in os.environ.items() if k not in ("RECIPES", "RESULTS")})
-    assert r.stdout.strip() == ("e3_seed1 e3_seed2 v4_lr_do v1_lr v2_do v3_wd v5_lr_do_wd|"
+    assert r.stdout.strip() == ("e3_seed1 e3_seed2 v4_lr_do v1_lr v2_do v3_wd v5_lr_do_wd "
+                                "v3_wd_seed1 v4_lr_do_seed1 v3_wd_seed2 v4_lr_do_seed2|"
                                 "training/artifacts/e2e3_results.json")
     assert "run_e2e3_experiments.py" in open(SCRIPT).read() and "run_tfx_experiments" not in open(SCRIPT).read()

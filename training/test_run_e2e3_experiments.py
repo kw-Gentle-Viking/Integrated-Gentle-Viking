@@ -10,13 +10,26 @@ from training.test_run_tfx_experiments import FakeData, _expected_counts
 
 # ---------------- pure helpers ----------------
 def test_recipe_table_and_priority_order():
-    assert e2.DEFAULT_ORDER == ["e3_seed1", "e3_seed2", "v4_lr_do", "v1_lr", "v2_do", "v3_wd", "v5_lr_do_wd"]
+    assert e2.DEFAULT_ORDER == ["e3_seed1", "e3_seed2", "v4_lr_do", "v1_lr", "v2_do", "v3_wd", "v5_lr_do_wd",
+                               "v3_wd_seed1", "v4_lr_do_seed1", "v3_wd_seed2", "v4_lr_do_seed2"]
     assert e2.RECIPES["v4_lr_do"]["overrides"] == {"lr": 1e-4, "dropout": 0.3}
     assert e2.RECIPES["v5_lr_do_wd"]["overrides"] == {"lr": 1e-4, "dropout": 0.3, "weight_decay": 1e-3}
     assert e2.RECIPES["v6_state16"]["overrides"] == {"state_size": 16} and "v6_state16" not in e2.DEFAULT_ORDER
     assert [e2.RECIPES[n]["seed"] for n in ("e3_seed1", "e3_seed2")] == [1, 2]
-    assert all(e2.RECIPES[n]["seed"] == 0 and e2.RECIPES[n]["select"] == "val_ic" for n in e2.DEFAULT_ORDER[2:])
+    assert all(e2.RECIPES[n]["seed"] == 0 and e2.RECIPES[n]["select"] == "val_ic" for n in e2.DEFAULT_ORDER[2:7])
     assert all(e2.RECIPES[n]["select"] == "val_loss" for n in ("e3_seed1", "e3_seed2"))
+    # v3_wd / v4_lr_do seed-1/2 repeats: same overrides as the seed-0 recipe, seed only differs, no
+    # collision with the existing (already-run, do-not-retrain) seed-0 recipes or the E3 seed rows.
+    assert e2.RECIPES["v3_wd_seed1"]["overrides"] == e2.RECIPES["v3_wd"]["overrides"] == {"weight_decay": 1e-3}
+    assert e2.RECIPES["v3_wd_seed2"]["overrides"] == e2.RECIPES["v3_wd"]["overrides"]
+    assert e2.RECIPES["v4_lr_do_seed1"]["overrides"] == e2.RECIPES["v4_lr_do"]["overrides"] == {"lr": 1e-4, "dropout": 0.3}
+    assert e2.RECIPES["v4_lr_do_seed2"]["overrides"] == e2.RECIPES["v4_lr_do"]["overrides"]
+    assert [e2.RECIPES[n]["seed"] for n in ("v3_wd_seed1", "v4_lr_do_seed1", "v3_wd_seed2", "v4_lr_do_seed2")] == [1, 1, 2, 2]
+    assert all(e2.RECIPES[n]["group"] == "E2" and e2.RECIPES[n]["select"] == "val_ic" and e2.RECIPES[n]["patience"] == e2.E2_PATIENCE
+              for n in ("v3_wd_seed1", "v4_lr_do_seed1", "v3_wd_seed2", "v4_lr_do_seed2"))
+    assert e2.DEFAULT_ORDER[7:] == ["v3_wd_seed1", "v4_lr_do_seed1", "v3_wd_seed2", "v4_lr_do_seed2"]
+    assert len({e2.RECIPES[n]["tag"] for n in e2.RECIPES}) == len(e2.RECIPES)          # tags unique (doc table)
+    assert e2.RECIPES["v3_wd"]["seed"] == 0 and e2.RECIPES["v4_lr_do"]["seed"] == 0    # untouched, already run
 
 
 def test_recipe_opts_merge_and_fingerprint_distinguishes_variants():
@@ -44,6 +57,10 @@ def test_mean_std_best_epoch_and_seed_rows():
     assert e2.best_epoch_of({"patience": 3, "train": {"stopped_reason": "max_epochs", "last_epoch": 11}}) is None
     rows = e2.e3_seed_rows({"aligned": {"x": 0}}, {"e3_seed2": {"x": 2}, "v1_lr": {"x": 9}})
     assert [(s, r["x"]) for s, r in rows] == [(0, 0), (2, 2)]
+    # v3_wd/v4_lr_do seed-1/2 repeats are group E2, not E3: they must not leak into the R0 seed-variance table.
+    rows2 = e2.e3_seed_rows({"aligned": {"x": 0}},
+                            {"v3_wd_seed1": {"x": 1}, "v4_lr_do_seed1": {"x": 1}, "e3_seed1": {"x": 1}})
+    assert [s for s, _ in rows2] == [0, 1]
 
 
 def test_render_doc_empty_states_discipline():
@@ -151,6 +168,33 @@ def test_weight_decay_recipe_reaches_optimizer(tmp_path, monkeypatch, small_min_
     data.expected_samples = _expected_counts(data)
     e2.main(_args(tmp_path, "--recipes", "v3_wd", "--epochs", "1"), data=data)
     assert seen and seen[0]["weight_decay"] == 1e-3
+
+
+def test_seed_variants_of_leading_e2_candidates_run_with_correct_seed_and_overrides(tmp_path, monkeypatch, small_min_names):
+    """v3_wd_seed1/2 and v4_lr_do_seed1/2 reuse the seed-0 recipe's overrides with only the seed changed, and
+    do not collide (fingerprint-wise or results-key-wise) with the already-run seed-0 v3_wd/v4_lr_do."""
+    _no_budget(monkeypatch)
+    data = FakeData()
+    data.expected_samples = _expected_counts(data)
+    art = tmp_path / "art"
+    a = _args(tmp_path, "--recipes", "v3_wd_seed1", "v4_lr_do_seed1", "v3_wd_seed2", "v4_lr_do_seed2",
+             "--epochs", "1")
+    assert e2.main(a, data=data) == 0
+    res = json.load(open(art / "e2e3_results.json"))
+    assert list(res) == ["v3_wd_seed1", "v4_lr_do_seed1", "v3_wd_seed2", "v4_lr_do_seed2"]
+    assert res["v3_wd_seed1"]["hparams"]["weight_decay"] == 1e-3 and res["v3_wd_seed1"]["seed"] == 1
+    assert res["v4_lr_do_seed1"]["hparams"]["lr"] == 1e-4 and res["v4_lr_do_seed1"]["hparams"]["dropout"] == 0.3
+    assert res["v3_wd_seed2"]["seed"] == 2 and res["v4_lr_do_seed2"]["seed"] == 2
+    for n in ("v3_wd_seed1", "v4_lr_do_seed1", "v3_wd_seed2", "v4_lr_do_seed2"):
+        assert res[n]["selection"] == "val_ic" and res[n]["group"] == "E2"
+
+    # rerunning is a no-op (idempotent skip -- nothing retrained), and running the untouched seed-0
+    # recipes never collides with these seed-1/2 results keys.
+    before = (art / "e2e3_results.json").read_text()
+    assert e2.main(a, data=data) == 0
+    assert (art / "e2e3_results.json").read_text() == before
+    doc = (tmp_path / "doc.md").read_text()
+    assert "V3-s1 v3_wd_seed1" in doc and "V4-s2 v4_lr_do_seed2" in doc
 
 
 def test_oot_never_scored_per_epoch_and_2025_guard(tmp_path, monkeypatch, small_min_names):

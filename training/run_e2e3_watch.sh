@@ -1,6 +1,7 @@
 #!/bin/bash
 # e2e3-watch: a persistent supervisor around the resumable E2/E3 TFT experiments
-# (training/run_e2e3_experiments.py: E3 seeds 1/2 of R0, then E2 variants V4 V1 V2 V3 V5).
+# (training/run_e2e3_experiments.py: E3 seeds 1/2 of R0, then E2 variants V4 V1 V2 V3 V5, then seed
+# 1/2 repeats of the two leading E2 candidates V3 V4).
 #
 # Waits until the GPU has been idle, (re)starts the runner, and loops until every recipe in $RECIPES is
 # recorded in training/artifacts/e2e3_results.json. The runner resumes at EPOCH granularity, so an
@@ -28,7 +29,7 @@
 set -uo pipefail
 
 RESULTS="${RESULTS:-training/artifacts/e2e3_results.json}"
-RECIPES="${RECIPES:-e3_seed1 e3_seed2 v4_lr_do v1_lr v2_do v3_wd v5_lr_do_wd}"
+RECIPES="${RECIPES:-e3_seed1 e3_seed2 v4_lr_do v1_lr v2_do v3_wd v5_lr_do_wd v3_wd_seed1 v4_lr_do_seed1 v3_wd_seed2 v4_lr_do_seed2}"
 PYTHON="${PYTHON:-/home/user/miniconda3/envs/dl_env/bin/python}"
 WORKTREE="${WORKTREE:-/home/user/AI_Gentle_Viking_RE/.worktrees/ai-model-redesign}"
 CONSECUTIVE_IDLE_CHECKS="${CONSECUTIVE_IDLE_CHECKS:-10}"

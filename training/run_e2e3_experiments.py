@@ -19,9 +19,12 @@ Discipline (binding): variants are selected on the val 2024 rank IC ONLY. The 20
 exactly once per recipe, on the final selected checkpoint, is recorded for confirmation and is NEVER a
 selection criterion (never scored per epoch). The 2025 test window is never scored.
 
-Priority order = e3_seed1, e3_seed2, v4_lr_do, v1_lr, v2_do, v3_wd, v5_lr_do_wd (v6_state16 only on
-request via --recipes). Resumable at epoch granularity; a recipe is recorded in e2e3_results.json only
-when finished; `--max-minutes` stops between epochs (exit 0, state resumable).
+Priority order = e3_seed1, e3_seed2, v4_lr_do, v1_lr, v2_do, v3_wd, v5_lr_do_wd, v3_wd_seed1, v4_lr_do_seed1,
+v3_wd_seed2, v4_lr_do_seed2 (v6_state16 only on request via --recipes). The last four repeat v3_wd /
+v4_lr_do (same overrides, val-IC selection) at seed 1 and 2, to check whether those two E2 candidates'
+val-IC edge over R0 survives across seeds (seed-0 R0 itself has val IC 0.003-0.046 across seeds 0-2).
+Resumable at epoch granularity; a recipe is recorded in e2e3_results.json only when finished;
+`--max-minutes` stops between epochs (exit 0, state resumable).
 
     set -a && source .env && set +a
     PYTHONPATH=. python training/run_e2e3_experiments.py [--recipes v4_lr_do v1_lr] [--max-minutes 600]
@@ -72,8 +75,17 @@ RECIPES = {
                         select="val_ic", patience=E2_PATIENCE, desc="V4 + weight_decay 1e-3"),
     "v6_state16": dict(tag="V6", group="E2", seed=0, overrides={"state_size": 16}, select="val_ic",
                        patience=E2_PATIENCE, desc="state_size 16 (optional)"),
+    "v3_wd_seed1": dict(tag="V3-s1", group="E2", seed=1, overrides={"weight_decay": 1e-3}, select="val_ic",
+                        patience=E2_PATIENCE, desc="Adam weight_decay 1e-3 (L2, not AdamW), seed 1"),
+    "v4_lr_do_seed1": dict(tag="V4-s1", group="E2", seed=1, overrides={"lr": 1e-4, "dropout": 0.3}, select="val_ic",
+                           patience=E2_PATIENCE, desc="lr 1e-4 + dropout 0.3, seed 1"),
+    "v3_wd_seed2": dict(tag="V3-s2", group="E2", seed=2, overrides={"weight_decay": 1e-3}, select="val_ic",
+                        patience=E2_PATIENCE, desc="Adam weight_decay 1e-3 (L2, not AdamW), seed 2"),
+    "v4_lr_do_seed2": dict(tag="V4-s2", group="E2", seed=2, overrides={"lr": 1e-4, "dropout": 0.3}, select="val_ic",
+                           patience=E2_PATIENCE, desc="lr 1e-4 + dropout 0.3, seed 2"),
 }
-DEFAULT_ORDER = ["e3_seed1", "e3_seed2", "v4_lr_do", "v1_lr", "v2_do", "v3_wd", "v5_lr_do_wd"]
+DEFAULT_ORDER = ["e3_seed1", "e3_seed2", "v4_lr_do", "v1_lr", "v2_do", "v3_wd", "v5_lr_do_wd",
+                 "v3_wd_seed1", "v4_lr_do_seed1", "v3_wd_seed2", "v4_lr_do_seed2"]
 
 
 # --------------------------------------------------------------------------------------------
