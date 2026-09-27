@@ -10,11 +10,18 @@ Protocol (binding):
   * 2025 rows are never used for anything.
 
     set -a && source .env && set +a
-    CUDA_VISIBLE_DEVICES='' PYTHONPATH=. python training/run_tabular_baseline.py
+    CUDA_VISIBLE_DEVICES='' PYTHONPATH=. python training/run_tabular_baseline.py            # E0v2 (default)
+
+E0v2 (default, --align today): same protocol, but on adjusted-price data (stage1_data.DATA_VERSION) and on
+EXACTLY the (ticker, date) sample sets the TFT recipes (training/run_tfx_experiments.py, align="today") score,
+so the numbers are like-for-like with R0..R3. Output: tabular_baseline_v2.json + docs/tabular_baseline_v2.md
+(the old tabular_baseline.json / docs/tabular_baseline.md are never touched).
+--align legacy keeps the old (t+encoder_len) sample enumeration for reference, written to a separate JSON.
 """
 import json
 import logging
 import os
+import argparse
 import subprocess
 import sys
 
@@ -30,7 +37,13 @@ logger = logging.getLogger(__name__)
 
 ART = "training/artifacts"
 RESULT_JSON = f"{ART}/tabular_baseline.json"
-DOC_PATH = "docs/tabular_baseline.md"
+DOC_PATH = "docs/tabular_baseline.md"            # legacy E0 doc: never written by the v2 flow
+V2_JSON = f"{ART}/tabular_baseline_v2.json"
+V2_LEGACY_JSON = f"{ART}/tabular_baseline_v2_legacy_align.json"
+V2_DOC = "docs/tabular_baseline_v2.md"
+TFX_JSON = f"{ART}/tfx_results.json"
+EXPECTED_ALIGNED = {"val_2024": 36929, "oot_2026": 33364}   # TFT-runner aligned sample counts (full universe)
+RET_CLIP = 0.30
 S3_JSON = f"{ART}/signal_baseline.json"
 CHAMPION_CONFIG_PATH = "training/champion_config.json"
 VN_PATH = "training/threshold_vn.json"
@@ -57,7 +70,7 @@ def _git_commit() -> str:
         sha = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], text=True).strip()
         dirty = subprocess.check_output(
             ["git", "status", "--porcelain", "--", "training/run_tabular_baseline.py",
-             "training/tabular_features.py"], text=True).strip()
+             "training/tabular_features.py", "training/dataset.py", "training/stage1_data.py"], text=True).strip()
         return sha + ("+dirty" if dirty else "")
     except Exception:  # noqa: BLE001
         return "unknown"
@@ -65,7 +78,7 @@ def _git_commit() -> str:
 
 def load_frame(dsn: str, cols: list[str]) -> pd.DataFrame:
     import psycopg2
-    sel = ", ".join(sorted(set(cols + ["next_day_return", "volatility_20d", "label_vn"])))
+    sel = ", ".join(sorted(set(cols + ["next_day_return", "volatility_20d", "label_vn", "label"])))
     q = (f"SELECT ticker, trade_date, {sel} FROM feature_pool "
          f"WHERE trade_date >= %s AND trade_date <= %s ORDER BY ticker, trade_date")
     conn = psycopg2.connect(dsn)
@@ -97,6 +110,44 @@ def build_features(df: pd.DataFrame, champ_cols: list[str]) -> tuple[pd.DataFram
     fs["F2"] = fs["F1"] + lag_cols
     fs["F3"] = fs["F2"] + [f"{c}_csr" for c in RANK_BASE + lag_cols]
     return df, fs
+
+
+def enumerate_samples(frames: dict, columns: list[str], min_target: str, align: str) -> list[tuple[str, str]]:
+    """(ticker, sample date) list, in dataset order, exactly as the TFT runner's eval dataset
+    (run_tfx_experiments.build_window_dataset) enumerates it: TickerDayDataset(align) over the window's
+    frames, samples whose target date < min_target dropped. For align="today" the date is that of the
+    last encoder row (= the day the prediction is made). Mutates `frames` like the Dataset does."""
+    from training.config import KNOWN_FUTURE_COLS, STATIC_COLS
+    from training.dataset import TickerDayDataset
+    from training.signal_data import filter_index_by_target_date, sample_meta
+    ds = TickerDayDataset(frames, columns, KNOWN_FUTURE_COLS, STATIC_COLS, WARMUP_ROWS, align=align)
+    filter_index_by_target_date(ds, min_target)
+    return [(tk, d) for tk, d, _ in sample_meta(ds)]
+
+
+def aligned_sample_sets(dsn: str, align: str = "today") -> dict:
+    """{window: dict(tickers, dates, n)} on the adj1 caches (built read-only from the DB via `dsn` when a
+    cache is missing). For align="today" every window is cross-checked against the TFT runner's own
+    build_window_dataset (same list, same order) and the known counts."""
+    from training import run_tfx_experiments as tfx
+    from training.stage1_data import DATA_VERSION, load_or_build_ticker_dfs
+    champ = json.load(open(CHAMPION_CONFIG_PATH))
+    out = {}
+    for w in tfx.EVAL_WINDOWS:
+        sp = tfx.SPLITS[w]
+        cache = os.path.join(ART, sp["cache"])
+        keys = enumerate_samples(load_or_build_ticker_dfs(dsn, sp["load_start"], sp["load_end"], cache),
+                                 champ["columns"], sp["min_target"], align)
+        if align == "today":
+            frames = load_or_build_ticker_dfs(dsn, sp["load_start"], sp["load_end"], cache)
+            _, meta = tfx.build_window_dataset(w, frames, champ["columns"], {"align": "today"})
+            assert keys == [(t, d) for t, d, _ in meta], f"{w}: differs from the TFT runner's sample list"
+            assert len(keys) == EXPECTED_ALIGNED[w], (w, len(keys), EXPECTED_ALIGNED[w])
+        assert len(set(keys)) == len(keys)
+        out[w] = dict(tickers=np.array([k[0] for k in keys]), dates=np.array([k[1] for k in keys]), n=len(keys))
+        logger.info("[%s] %s samples (%s, data %s): %d, dates %s..%s", w, align, cache, DATA_VERSION, len(keys),
+                    min(out[w]["dates"]), max(out[w]["dates"]))
+    return out
 
 
 def sample_sets() -> dict:
@@ -157,7 +208,9 @@ def bundle(dates, rets, score, tickers):
     tickers = np.asarray(tickers)
     per_t = {t: per_ticker_ts_metrics(np.asarray(score)[tickers == t], np.asarray(rets)[tickers == t])
              for t in PROD_TICKERS}
-    return {"signal": sig, "ic_se": se, "per_ticker": per_t}, ics
+    sig_clip = compute_signal_metrics(list(dates), np.clip(np.asarray(rets, float), -RET_CLIP, RET_CLIP), probs,
+                                      min_names_per_day=20)
+    return {"signal": sig, "signal_clip30": sig_clip, "ic_se": se, "per_ticker": per_t}, ics
 
 
 def paired_diff(ics_a: dict, ics_b: dict):
@@ -310,19 +363,200 @@ def render_doc(r: dict) -> str:
     return "\n".join(L)
 
 
-def main():
+CONFIG_DESC.update({"hgb_clf_label_F3": "HGB clf (fixed label), F3"})
+V2_LABELS = {"hgb_clf_F3": "label_vn", "hgb_clf_label_F3": "label"}   # classifier config -> label column
+
+
+def _read_json(path):
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def old_e0_reference(path: str = RESULT_JSON) -> dict:
+    """Old E0 (unadjusted data, legacy alignment) numbers per config/window, for the change table."""
+    e0 = _read_json(path)
+    if not e0:
+        return {}
+    out = {}
+    for k, per in e0["configs"].items():
+        out[k] = {w: {"ic": per[w]["signal"]["mean_daily_rank_ic"], "ic_se": per[w]["ic_se"],
+                      "ic_ir": per[w]["signal"]["ic_ir"], "qls": per[w]["signal"]["quantile_long_short"]["mean_spread"]}
+                  for w in per}
+    ref = e0.get("references", {})
+    out["reversal"] = {w: {"ic": v["reversal"]["signal"]["mean_daily_rank_ic"], "ic_se": v["reversal"]["ic_se"],
+                           "ic_ir": v["reversal"]["signal"]["ic_ir"],
+                           "qls": v["reversal"]["signal"]["quantile_long_short"]["mean_spread"]}
+                       for w, v in ref.items()}
+    return out
+
+
+def tft_reference(path: str = TFX_JSON) -> dict:
+    """{recipe: {window: {signal, macro_f1}}} from the TFT runner's results, if it has been run."""
+    r = _read_json(path)
+    if not r:
+        return {}
+    out = {}
+    for name, rec in r.items():
+        if isinstance(rec, dict) and "val_2024" in rec and "signal" in rec.get("val_2024", {}):
+            out[name] = {w: {"signal": rec[w]["signal"], "macro_f1": rec[w]["metrics"].get("macro_f1"),
+                             "tag": rec.get("tag")} for w in ("val_2024", "oot_2026") if w in rec}
+    return out
+
+
+def render_doc_v2(r: dict) -> str:
+    big30 = ", ".join(w + " " + str(v["n_ret_over_30pct"]) for w, v in r["windows"].items())
+    L = ["# Tabular baseline v2 (E0v2): like-for-like reference for the TFT recipes R0..R3", "",
+         f"Code commit: `{r['code_commit']}` (`training/run_tabular_baseline.py`, `training/tabular_features.py`). "
+         "Raw output: `training/artifacts/tabular_baseline_v2.json` (gitignored). "
+         "Supersedes the numbers of [`tabular_baseline.md`](tabular_baseline.md) (old E0: unadjusted prices + legacy sample "
+         "alignment; see the errata at its top and in [`signal_baseline.md`](signal_baseline.md)); those files are unchanged. "
+         "Data rebuild: [`data_adjustment_report.md`](data_adjustment_report.md).", "",
+         "## What changed vs old E0", "",
+         f"- **Data**: adjusted prices, `DATA_VERSION = {r['data_version']}` (feature_pool/labels rebuilt; caches `__{r['data_version']}`).",
+         f"- **Sample set**: exactly the (ticker, date) list the TFT runner scores with `TickerDayDataset(align=\"today\")` "
+         "(sample date = the day the prediction is made = last encoder row; features at that day, target = its "
+         "`next_day_return`). "
+         + "; ".join(f"**{w}**: {v['n_samples']} samples (targets {v['first_date']}..{v['last_date']}, {v['n_days_scored']} scored days)"
+                     for w, v in r["windows"].items())
+         + ". The lists were asserted identical, in order, to `run_tfx_experiments.build_window_dataset` output and to the "
+         "known counts (36,929 / 33,364). Old E0 used the legacy enumeration (36,729 / 33,364, dates shifted one row).",
+         "- Everything else is the old E0 protocol: train <= 2023-12-31; hyper-parameters selected on 2023 (fit <= 2022); "
+         "val 2024 scored, OOT 2026 scored once per final config; 2025 rows never used; same feature sets F1/F2/F3, "
+         "Ridge / HGB (sklearn HistGradientBoosting), fixed HGB params, `random_state=0`, random reference `default_rng(0)`.",
+         f"- Added config `hgb_clf_label_F3` (HGB classifier on the fixed-threshold `label`; `hgb_clf_F3` uses `label_vn`) so both "
+         "label versions are on record. Macro F1 (auxiliary) exists only for the classifiers: argmax class vs that label on samples "
+         "with a non-null label; regressors have no class output.",
+         f"- Reproducibility: seed {r['seed']}, floor {r['floor']:.6f} (`threshold_vn.json`), returns are raw `next_day_return` "
+         f"(`|ret|>30%` counts: {big30}; "
+         "a clipped-return variant is in the JSON as `signal_clip30`).", "",
+         "## Selection on 2023 (fit on <= 2022)", "",
+         "| config | grid (mean daily IC on 2023) | chosen |", "|---|---|---|"]
+    for k, v in r["selection"].items():
+        grid = v.get("grid_select_ic_2023") or v.get("select_ic_2023_by_iter")
+        ch = f"alpha={v['chosen_alpha']:g}" if "chosen_alpha" in v else f"n_iter={v['chosen_n_iter']}"
+        L.append(f"| {k} | " + ", ".join(f"{a}: {_f(b, 3)}" for a, b in grid.items()) + f" | {ch} |")
+    L.append("")
+    old = r.get("old_e0", {})
+    for w, v in r["windows"].items():
+        L += [f"## {w} ({v['n_samples']} samples, {v['n_days_scored']} scored days)", "",
+              "Signal metrics (not UTIL). IC minus reversal is a paired difference over days (SE of the difference). "
+              "Old IC = old E0 (unadjusted, legacy alignment; not like-for-like).", "",
+              "| scorer | mean rank IC | SE | IC IR | quantile L/S | argmax L/S | macro F1 | IC minus reversal (SE) | old E0 IC |",
+              "|---|---|---|---|---|---|---|---|---|"]
+        rows = [(k, CONFIG_DESC[k], r["configs"][k][w]) for k in CONFIG_DESC if k in r["configs"]]
+        rows += [("reversal", "1-day reversal (-log_ret)", r["references"][w]["reversal"]),
+                 ("random", "random", r["references"][w]["random"])]
+        for k, name, b in rows:
+            s = b["signal"]
+            d2 = b.get("vs_reversal")
+            o = old.get(k, {}).get(w)
+            mf = b.get("macro_f1")
+            L.append(f"| {name} | {_f(s['mean_daily_rank_ic'])} | {_f(b['ic_se'])} | {_f(s['ic_ir'], 3)} | "
+                     f"{_p(s['quantile_long_short']['mean_spread'])} | {_p(s['argmax_long_short']['spread'])} | "
+                     f"{_f(mf, 3)} | " + (f"{d2['mean_diff']:+.4f} ({d2['se']:.4f}) | " if d2 else "- | ")
+                     + (f"{o['ic']:.4f}" if o and o['ic'] is not None else "-") + " |")
+        L.append("")
+    L += ["## Change vs old E0 (mean rank IC, same config)", "",
+          "| config | val old | val v2 | oot old | oot v2 |", "|---|---|---|---|---|"]
+    for k in CONFIG_DESC:
+        if k not in r["configs"]:
+            continue
+        c = []
+        for w in r["windows"]:
+            o = old.get(k, {}).get(w)
+            c += [_f(o["ic"]) if o and o["ic"] is not None else "-", _f(r["configs"][k][w]["signal"]["mean_daily_rank_ic"])]
+        L.append(f"| {CONFIG_DESC[k]} | " + " | ".join(c) + " |")
+    c = []
+    for w in r["windows"]:
+        o = old.get("reversal", {}).get(w)
+        c += [_f(o["ic"]) if o else "-", _f(r["references"][w]["reversal"]["signal"]["mean_daily_rank_ic"])]
+    L += ["| reversal | " + " | ".join(c) + " |", ""]
+    L += ["## Reference values for the TFT recipes (R0..R3)", "",
+          "Compare a TFT recipe's `mean_daily_rank_ic` / `ic_ir` / quantile L/S on the same window against the rows above "
+          f"(bar: best tabular = `{r['bar']['config']}`, val IC {_f(r['bar']['val_ic'])}, OOT IC {_f(r['bar']['oot_ic'])}; "
+          f"reversal val {_f(r['references']['val_2024']['reversal']['signal']['mean_daily_rank_ic'])}, "
+          f"OOT {_f(r['references']['oot_2026']['reversal']['signal']['mean_daily_rank_ic'])}). "
+          "Selection of the bar row uses val only (OOT shown for confirmation).", ""]
+    tft = r.get("tft_reference") or {}
+    if tft:
+        L += ["| recipe | window | IC | IC IR | quantile L/S | macro F1 |", "|---|---|---|---|---|---|"]
+        for name, per in tft.items():
+            for w, v in per.items():
+                sg = v["signal"]
+                L.append(f"| {name} ({v.get('tag')}) | {w} | {_f(sg['mean_daily_rank_ic'])} | {_f(sg['ic_ir'], 3)} | "
+                         f"{_p(sg['quantile_long_short']['mean_spread'])} | {_f(v['macro_f1'], 3)} |")
+        L.append("")
+    else:
+        L += ["`training/artifacts/tfx_results.json` not present at run time: TFT recipes not yet run, so no TFT rows.", ""]
+    L += ["## Production tickers (noisy)", "",
+          "Time-series Spearman(score, next_day_return) and sign hit-rate per ticker (n about 170-260 days; "
+          "none distinguishable from 0 / 50%).", "",
+          "| scorer | window | 005930 rho | 005930 hit (up-rate) | 000660 rho | 000660 hit (up-rate) |", "|---|---|---|---|---|---|"]
+    for w in r["windows"]:
+        rows = [(CONFIG_DESC[k], r["configs"][k][w]) for k in CONFIG_DESC if k in r["configs"]]
+        rows += [("reversal", r["references"][w]["reversal"])]
+        for name, b in rows:
+            cells = []
+            for t in PROD_TICKERS:
+                m = b["per_ticker"][t]
+                cells += [_f(m["spearman"], 3), f"{_f(m['hit_rate'], 3)} ({_f(m['base_up_rate'], 2)}), n={m['n']}"]
+            L.append(f"| {name} | {w} | " + " | ".join(cells) + " |")
+    L.append("")
+    L.append(V2_INTERPRETATION)
+    return "\n".join(L)
+
+
+V2_INTERPRETATION = """## Interpretation (SE-aware; differences are called real only at >= ~2 paired SE)
+
+1. **Bar for the TFT recipes (like-for-like: adjusted data, `align="today"` sample sets, features at day d predicting d->d+1).**
+   Best tabular by val IC = HGB classifier on the fixed label, F3: val IC 0.058 (SE 0.009), OOT 0.037 (SE 0.014).
+   HGB regressor F3: 0.056 / 0.031. Reversal: 0.0625 / 0.0423. Quantile L/S is about 0.2% per day gross on val for the
+   best rows (0.26% for reversal), 0.1-0.35% on OOT; costs not considered. A TFT recipe has to beat these, not the old E0 numbers.
+2. **The rebuild changed little.** Old vs v2 IC of the same config moves by at most ~0.015 (HGB reg F3 OOT 0.044 -> 0.031,
+   HGB reg F2 OOT 0.017 -> 0.026), i.e. inside the ~0.01-0.015 SE of one window; the sample set and price adjustment do not
+   alter the picture. No adjusted-data return exceeds 30% in either window (`n_ret_over_30pct` = 0).
+   The unchanged reversal IC (0.0625 val) is expected: rank IC is insensitive to the few adjusted corporate-action days.
+3. **No tabular model is distinguishable from the 1-day reversal rule.** IC minus reversal is negative or ~0 everywhere; on val
+   Ridge F1/F2/F3 and HGB reg F2, csz and clf(label_vn) are 2-4 paired SE below it, HGB reg F3 -0.006 (1.2 SE), clf(fixed label)
+   -0.005 (0.6 SE). On OOT all are within ~2 SE (best clf(label_vn) +0.004 +/- 0.012). `log_ret` and its lags are inputs to every
+   feature set, and no decomposition (dropping the reversal inputs) was done, so we do not know whether the HGB signal is more than
+   reversal plus noise.
+4. **Ranking of configs is unstable across windows** (val best: clf fixed label 0.058; OOT best: clf label_vn 0.046, csz 0.041),
+   the per-window SE is 0.009-0.015 and config differences were not tested with paired SEs; treat the ordering as noise. Classifier
+   argmax L/S is negative on OOT for most models (uncalibrated sign), so IC / quantile L/S are the meaningful columns.
+5. **Label versions.** The fixed-threshold-label classifier is not worse than the label_vn classifier on val (0.058 vs 0.046) and
+   slightly worse on OOT (0.037 vs 0.046); both differences are inside one SE. Macro F1 (auxiliary, own label each): fixed label
+   0.340 val / 0.356 OOT, label_vn 0.290 / 0.260; not comparable across the two label definitions.
+6. **Selection caveat.** 9 configs were all scored on val and OOT; the bar row is chosen on val with hindsight over ~9 tries
+   (mildly optimistic). HGB hyper-parameters other than n_iter (and ridge alpha) were fixed a priori. `hgb_reg_csz_F3` again
+   picked the smallest n_iter of the grid (25) with IC still falling, so its optimum may be lower.
+7. **Provenance.** Numbers were produced by the working-tree version of `run_tabular_baseline.py` on top of commit `9523e24`
+   (JSON `code_commit` reads `9523e24+dirty` because the runner was not yet committed); the committed runner differs only by
+   this interpretation text. TFT recipes had not been run when this was written, so no TFT row is present;
+   `--render-only` re-reads `tfx_results.json` and adds the TFT rows once it exists.
+"""
+
+
+def main(align: str = "today", out_json: str | None = None, doc_path: str | None = None):
     from sklearn.ensemble import HistGradientBoostingClassifier, HistGradientBoostingRegressor
     from sklearn.linear_model import Ridge
+    from evaluation.evaluate import compute_metrics
+    from training.stage1_data import DATA_VERSION
     from training.tabular_features import Preprocessor, demean_by_date, make_z_target
 
     dsn = os.environ.get("STOCK_DB_V2_DSN")
     if not dsn:
         raise ValueError("STOCK_DB_V2_DSN environment variable not set")
+    out_json = out_json or (V2_JSON if align == "today" else V2_LEGACY_JSON)
+    doc_path = doc_path if doc_path is not None else (V2_DOC if align == "today" else None)
     champ = json.load(open(CHAMPION_CONFIG_PATH))
     vn = json.load(open(VN_PATH))
     floor = float(vn["floor"])
     commit = _git_commit()
-    samples = sample_sets()
+    samples = aligned_sample_sets(dsn, align)
 
     df = load_frame(dsn, champ["columns"])
     df, fsets = build_features(df, champ["columns"])
@@ -338,26 +572,38 @@ def main():
     logger.info("rows: fit<=2022 %d, select-2023 %d, final<=2023 %d", len(tr_fit), len(tr_sel), len(tr_full))
 
     idx = df.set_index(["ticker", "date_s"])
+    assert idx.index.is_unique
     win = {}
     for name, s in samples.items():
         sub = idx.loc[list(zip(s["tickers"].tolist(), s["dates"].tolist()))]
-        assert np.allclose(sub["next_day_return"].values, s["ret"], equal_nan=True), "next_day_return mismatch vs S3"
         win[name] = sub.reset_index()
+        assert win[name]["label"].notna().all(), f"{name}: sample without a fixed label in feature_pool"
         assert win[name].date_s.min() >= ("2024-01-01" if name == "val_2024" else "2026-01-01")
         assert not ((win[name].date_s >= "2025-01-01") & (win[name].date_s <= "2025-12-31")).any()
+        s["ret"] = win[name]["next_day_return"].values.astype(float)
+        s["log_ret"] = win[name]["log_ret"].values.astype(float)
 
-    results = {"code_commit": commit, "floor": floor, "vn_k": vn["k"], "selection": {}, "configs": {},
-               "references": {}, "windows": {}}
+    results = {"code_commit": commit, "align": align, "data_version": DATA_VERSION, "seed": 0, "floor": floor,
+               "vn_k": vn["k"], "selection": {}, "configs": {}, "references": {}, "windows": {}}
     for name, s in samples.items():
-        results["windows"][name] = {"targets": WINDOWS[name], "n_samples": int(len(s["ret"])),
-                                    "n_days_scored": None}
+        rr = s["ret"]
+        results["windows"][name] = {
+            "n_samples": int(len(rr)), "first_date": min(s["dates"].tolist()), "last_date": max(s["dates"].tolist()),
+            "n_days_scored": None, "n_ret_nan": int(np.isnan(rr).sum()),
+            "n_ret_over_30pct": int((np.abs(rr[np.isfinite(rr)]) > RET_CLIP).sum())}
     ics_store = {n: {} for n in samples}
 
-    def score_windows(cname, score_fn, Xcols):
+    def score_windows(cname, score_fn, Xcols, clf=None):
         results["configs"][cname] = {}
         for wn, w in win.items():
             sc = score_fn(w[Xcols].values)
             b, ics = bundle(w["date_s"].values, samples[wn]["ret"], sc, w["ticker"].values)
+            if clf is not None:
+                model, lab = clf
+                pred = model.predict(w[Xcols].values)
+                ok = w[lab].notna().values
+                b["macro_f1"] = compute_metrics(w.loc[ok, lab].astype(int).tolist(), pred[ok].astype(int).tolist())["macro_f1"]
+                b["label_col"] = lab
             results["configs"][cname][wn] = b
             ics_store[wn][cname] = ics
             logger.info("%s %s IC %.4f (SE %.4f)", cname, wn, b["signal"]["mean_daily_rank_ic"], b["ic_se"])
@@ -401,54 +647,67 @@ def main():
     m = mk(best_n).fit(tr_full[cols].values, zc_full)
     score_windows("hgb_reg_csz_F3", lambda X, m=m: m.predict(X), cols)
 
-    # ---- HGB classifier on label_vn (F3): score = p_buy - p_sell ----
+    # ---- HGB classifiers (F3): score = p_buy - p_sell; label_vn (as old E0) and the fixed-threshold label ----
     cols = fsets["F3"]
-    ok_f, ok_full = tr_fit["label_vn"].notna(), tr_full["label_vn"].notna()
     mkc = lambda n: HistGradientBoostingClassifier(max_iter=n, **HGB_PARAMS)  # noqa: E731
     def staged_score(model, X):
         for p in model.staged_predict_proba(X):   # classes_ sorted: 0=buy,1=hold,2=sell
             yield p[:, 0] - p[:, 2]
-    best_n, res = select_hgb_iters(
-        mkc, tr_fit.loc[ok_f, cols].values, tr_fit.loc[ok_f, "label_vn"].astype(int).values,
-        tr_sel[cols].values, sel_dates, sel_ret, staged_score)
-    results["selection"]["hgb_clf_F3"] = {"select_ic_2023_by_iter": {str(k): v for k, v in res.items()},
-                                          "chosen_n_iter": best_n}
-    m = mkc(best_n).fit(tr_full.loc[ok_full, cols].values, tr_full.loc[ok_full, "label_vn"].astype(int).values)
-    assert list(m.classes_) == [0, 1, 2]
-    score_windows("hgb_clf_F3", lambda X, m=m: (lambda p: p[:, 0] - p[:, 2])(m.predict_proba(X)), cols)
+    for cname, lab in V2_LABELS.items():
+        ok_f, ok_full = tr_fit[lab].notna(), tr_full[lab].notna()
+        best_n, res = select_hgb_iters(
+            mkc, tr_fit.loc[ok_f, cols].values, tr_fit.loc[ok_f, lab].astype(int).values,
+            tr_sel[cols].values, sel_dates, sel_ret, staged_score)
+        results["selection"][cname] = {"select_ic_2023_by_iter": {str(k): v for k, v in res.items()},
+                                       "chosen_n_iter": best_n, "label_col": lab}
+        m = mkc(best_n).fit(tr_full.loc[ok_full, cols].values, tr_full.loc[ok_full, lab].astype(int).values)
+        assert list(m.classes_) == [0, 1, 2]
+        score_windows(cname, lambda X, m=m: (lambda p: p[:, 0] - p[:, 2])(m.predict_proba(X)), cols, clf=(m, lab))
 
-    # ---- references: S3 rows copied from JSON; daily IC series rebuilt from S3 npz for paired tests ----
-    s3 = json.load(open(S3_JSON))
+    # ---- references on the SAME sample sets: reversal (-log_ret) and random ----
     for wn, s in samples.items():
         results["references"][wn] = {}
-        for rname, sc in (("tft_champion", s["champ_probs"][:, 0] - s["champ_probs"][:, 2]),
-                          ("reversal", -s["log_ret"])):
-            b, ics = bundle(samples[wn]["dates"], s["ret"], sc, s["tickers"])
-            src = s3[wn]["model" if rname == "tft_champion" else "references"]
-            src = src if rname == "tft_champion" else src["reversal"]
-            assert abs(b["signal"]["mean_daily_rank_ic"] - src["signal"]["mean_daily_rank_ic"]) < 1e-9, rname
-            b["s3_copy"] = {"signal": src["signal"]}       # verbatim S3 numbers
-            results["references"][wn][rname] = b
-            ics_store[wn][rname] = ics
-        b, _ = bundle(samples[wn]["dates"], s["ret"], np.random.default_rng(0).standard_normal(len(s["ret"])),
-                      s["tickers"])
-        assert abs(b["signal"]["mean_daily_rank_ic"] - s3[wn]["references"]["random"]["signal"]["mean_daily_rank_ic"]) < 1e-9
+        b, ics = bundle(s["dates"], s["ret"], -s["log_ret"], s["tickers"])
+        results["references"][wn]["reversal"] = b
+        ics_store[wn]["reversal"] = ics
+        b, _ = bundle(s["dates"], s["ret"], np.random.default_rng(0).standard_normal(len(s["ret"])), s["tickers"])
         results["references"][wn]["random"] = b
         results["windows"][wn]["n_days_scored"] = results["references"][wn]["reversal"]["signal"]["n_days_used"]
         for cname in results["configs"]:
-            results["configs"][cname][wn]["vs_tft"] = paired_diff(ics_store[wn][cname], ics_store[wn]["tft_champion"])
             results["configs"][cname][wn]["vs_reversal"] = paired_diff(ics_store[wn][cname], ics_store[wn]["reversal"])
 
-    with open(RESULT_JSON, "w") as f:
+    # bar for TFT: best tabular config chosen by VAL IC only
+    best = max(results["configs"], key=lambda k: results["configs"][k]["val_2024"]["signal"]["mean_daily_rank_ic"] or -9)
+    results["bar"] = {"config": best, "val_ic": results["configs"][best]["val_2024"]["signal"]["mean_daily_rank_ic"],
+                      "oot_ic": results["configs"][best]["oot_2026"]["signal"]["mean_daily_rank_ic"]}
+    results["old_e0"] = old_e0_reference()
+    results["tft_reference"] = tft_reference()
+
+    with open(out_json, "w") as f:
         json.dump(results, f, indent=2, ensure_ascii=False)
-    logger.info("wrote %s", RESULT_JSON)
-    with open(DOC_PATH, "w") as f:
-        f.write(render_doc(results))
+    logger.info("wrote %s", out_json)
+    if doc_path:
+        with open(doc_path, "w") as f:
+            f.write(render_doc_v2(results))
+
+
+def parse_args(argv=None):
+    p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    p.add_argument("--align", choices=["today", "legacy"], default="today",
+                   help="sample enumeration: 'today' (E0v2, matches the TFT runner) or 'legacy' (old t+encoder_len rows)")
+    p.add_argument("--out-json", default=None)
+    p.add_argument("--doc", default=None, help="markdown output (default docs/tabular_baseline_v2.md for --align today)")
+    p.add_argument("--render-only", action="store_true", help="re-render the v2 doc from an existing v2 JSON")
+    return p.parse_args(argv)
 
 
 if __name__ == "__main__":
-    if "--render-only" in sys.argv:
-        with open(DOC_PATH, "w") as f:
-            f.write(render_doc(json.load(open(RESULT_JSON))))
+    args = parse_args()
+    if args.render_only:
+        src = args.out_json or V2_JSON
+        res = json.load(open(src))
+        res["tft_reference"] = tft_reference()          # pick up TFT results produced after the tabular run
+        with open(args.doc or V2_DOC, "w") as f:
+            f.write(render_doc_v2(res))
     else:
-        main()
+        main(args.align, args.out_json, args.doc)
