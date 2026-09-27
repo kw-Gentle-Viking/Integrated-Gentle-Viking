@@ -200,7 +200,7 @@ def model_versions_row_exists(path: str, version: str) -> bool:
 
 def read_reference_rows(ref_dir: str) -> dict:
     """{window: [(name, signal_dict, macro_f1_or_None), ...]}: TFT champion + reversal from S3's
-    signal_baseline.json, HGB F3 (regressor on z) from E0's tabular_baseline.json. Missing files or
+    signal_baseline.json, HGB F3 rows from E0v2's tabular_baseline_v2.json. Missing files or
     keys are skipped (the doc simply has fewer comparison rows)."""
     out = {w: [] for w in EVAL_WINDOWS}
     s3, e0 = {}, {}
@@ -210,7 +210,7 @@ def read_reference_rows(ref_dir: str) -> dict:
     except (OSError, ValueError):
         pass
     try:
-        with open(os.path.join(ref_dir, "tabular_baseline.json")) as f:
+        with open(os.path.join(ref_dir, "tabular_baseline_v2.json")) as f:
             e0 = json.load(f)
     except (OSError, ValueError):
         pass
@@ -220,9 +220,10 @@ def read_reference_rows(ref_dir: str) -> dict:
             out[w].append(("TFT champion (S3, legacy-aligned)", r["model"]["signal"], r["model"]["metrics"].get("macro_f1")))
             if "reversal" in r.get("references", {}):
                 out[w].append(("1-day reversal (S3, legacy sample set)", r["references"]["reversal"]["signal"], None))
-        h = e0.get("configs", {}).get("hgb_reg_F3", {}).get(w)
-        if h:
-            out[w].append(("HGB reg (z), F3 (E0, old data)", h["signal"], None))
+        for cfg, label in (("hgb_reg_F3", "HGB reg (z), F3 (E0v2)"), ("hgb_clf_label_F3", "HGB clf fixed label, F3 (E0v2)")):
+            h = e0.get("configs", {}).get(cfg, {}).get(w)
+            if h:
+                out[w].append((label, h["signal"], None))
     return out
 
 
