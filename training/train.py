@@ -141,7 +141,9 @@ def run_training(config: dict) -> dict:
     Returns also stopped_reason in {"max_epochs","early_stopping","budget"} and last_epoch."""
     device = config["device"]
     model = TemporalFusionTransformer(config["tft_config"]).to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=config["lr"])
+    # Optional L2 (Adam's weight_decay arg; NOT AdamW). Unset/0 => the exact prior Adam(lr=...) call.
+    opt_kwargs = {"weight_decay": config["weight_decay"]} if config.get("weight_decay") else {}
+    optimizer = torch.optim.Adam(model.parameters(), lr=config["lr"], **opt_kwargs)
     criterion = torch.nn.CrossEntropyLoss(weight=config["class_weights"].to(device))
 
     epoch_checkpoint_path = config.get("epoch_checkpoint_path")
@@ -167,6 +169,21 @@ def run_training(config: dict) -> dict:
     patience = config.get("early_stopping_patience")
     # Old checkpoints (or runs saved without patience) lack the counter -> resume it as 0.
     epochs_since_improve = int(checkpoint_state.get("epochs_since_improve", 0)) if checkpoint_state else 0
+    # Optional per-epoch metric hook: epoch_metric_fn(model, epoch) -> dict of floats (called right after
+    # the epoch's val loss, model left as-is; must not consume RNG). Each epoch's {epoch, train_loss,
+    # val_loss, **metrics} is kept in epoch_history (persisted in the epoch checkpoint, restored on
+    # resume). select_metric_key (a key of that dict, HIGHER is better; None/NaN never improves) switches
+    # best-checkpoint selection and early stopping from val loss to that metric; without it the hook only
+    # records. best_val_loss then still tracks the minimum val loss.
+    metric_fn = config.get("epoch_metric_fn")
+    select_key = config.get("select_metric_key") if metric_fn else None
+    epoch_history = list(checkpoint_state.get("epoch_history", [])) if checkpoint_state else []
+    best_metric = float("-inf")
+    best_epoch = None
+    if checkpoint_state:
+        if checkpoint_state.get("best_metric") is not None:
+            best_metric = checkpoint_state["best_metric"]
+        best_epoch = checkpoint_state.get("best_epoch")
     should_stop = config.get("should_stop")      # optional callable, e.g. a wall-clock budget check
     epoch_log = config.get("epoch_log")          # optional callable(str) for per-epoch liveness lines
     if start_epoch > 0:
@@ -188,13 +205,27 @@ def run_training(config: dict) -> dict:
                     torch.manual_seed(seed + epoch)
                 train_loss = train_one_epoch(model, config["train_loader"], optimizer, criterion, device)
                 val_loss = evaluate_loss(model, config["val_loader"], criterion, device)
-                wandb.log({"epoch": epoch, "train_loss": train_loss, "val_loss": val_loss})
-                if val_loss < best_val_loss:
+                metrics = metric_fn(model, epoch) if metric_fn else None
+                wandb.log({"epoch": epoch, "train_loss": train_loss, "val_loss": val_loss, **(metrics or {})})
+                loss_improved = val_loss < best_val_loss
+                if loss_improved:
                     best_val_loss = val_loss
+                if select_key:
+                    m = metrics.get(select_key)
+                    m = float("-inf") if m is None or m != m else float(m)
+                    improved = m > best_metric
+                    if improved:
+                        best_metric = m
+                else:
+                    improved = loss_improved
+                if improved:
+                    best_epoch = epoch
                     epochs_since_improve = 0
                     torch.save(model.state_dict(), checkpoint_path)
                 else:
                     epochs_since_improve += 1
+                if metric_fn:
+                    epoch_history.append({"epoch": epoch, "train_loss": train_loss, "val_loss": val_loss, **metrics})
                 if epoch_checkpoint_path:
                     state = {
                         "epoch": epoch, "model_state_dict": model.state_dict(),
@@ -205,12 +236,15 @@ def run_training(config: dict) -> dict:
                         state["resume_count"] = resume_count
                     if patience is not None:
                         state["epochs_since_improve"] = epochs_since_improve
+                    if metric_fn:
+                        state.update(epoch_history=epoch_history, best_metric=best_metric, best_epoch=best_epoch)
                     torch.save(state, epoch_checkpoint_path)
                 last_epoch = epoch
                 if epoch_log:
                     epoch_log(f"[run_training] {config['run_name']} epoch {epoch} train_loss={train_loss:.4f} "
                               f"val_loss={val_loss:.4f} best={best_val_loss:.4f}"
-                              f"{'' if patience is None else f' since_improve={epochs_since_improve}/{patience}'}")
+                              f"{'' if patience is None else f' since_improve={epochs_since_improve}/{patience}'}"
+                              f"{''.join(f' {k}={v:.4f}' for k, v in (metrics or {}).items() if isinstance(v, float))}")
                 if patience is not None and epochs_since_improve >= patience:
                     stopped_reason = "early_stopping"
                     break
@@ -228,4 +262,6 @@ def run_training(config: dict) -> dict:
     return {"best_val_loss": best_val_loss, "checkpoint_path": checkpoint_path,
             "stopped_reason": stopped_reason, "last_epoch": last_epoch,
             "resumed": start_epoch > 0, "resume_count": resume_count, "start_epoch": start_epoch,
-            "stale_checkpoint": stale_path}
+            "stale_checkpoint": stale_path,
+            "epoch_history": epoch_history, "best_metric": best_metric if select_key else None,
+            "best_epoch": best_epoch}
