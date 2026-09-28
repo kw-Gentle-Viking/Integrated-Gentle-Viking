@@ -1,7 +1,11 @@
 """임베딩 배열 + (ticker,date) 키를 표 피처 DataFrame과 내부조인. 커버리지가 기준 미달이면
 예외 -- 조용한 드롭 금지(spec §에러 처리)."""
+import logging
+
 import numpy as np
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 
 def join_embeddings_with_tabular(keys: list[tuple[str, str]], emb: np.ndarray, tab_df: pd.DataFrame,
@@ -22,6 +26,10 @@ def join_embeddings_with_tabular(keys: list[tuple[str, str]], emb: np.ndarray, t
 def assert_join_coverage(n_joined: int, n_emb: int, n_tab: int, min_ratio: float, label: str) -> None:
     baseline = min(n_emb, n_tab)
     ratio = (n_joined / baseline) if baseline else 1.0
+    # Always logged, not just on failure -- a passing call with e.g. min_ratio=0.95 can still drop
+    # up to 5% of rows silently; that drop rate needs to be visible even when it's within tolerance.
+    logger.info("[%s] join coverage %.4f (joined=%d, n_emb=%d, n_tab=%d, min_ratio=%s)",
+               label, ratio, n_joined, n_emb, n_tab, min_ratio)
     if ratio < min_ratio:
         raise ValueError(
             f"[{label}] join coverage {ratio:.3f} below min_ratio={min_ratio} "

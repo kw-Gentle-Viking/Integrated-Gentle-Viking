@@ -50,10 +50,26 @@ def _load_model(champion: dict, checkpoint_path: str, device):
 def _embed_split(name: str, model, frames: dict, cols: list[str], device, align: str = "today"):
     from training.config import KNOWN_FUTURE_COLS, STATIC_COLS
     from training.dataset import TickerDayDataset
-    ds = TickerDayDataset(frames, cols, KNOWN_FUTURE_COLS, STATIC_COLS, 60, align=align)
+    from training.run_tfx_experiments import ENCODER_LEN  # single source of truth, not a separate literal
+    ds = TickerDayDataset(frames, cols, KNOWN_FUTURE_COLS, STATIC_COLS, ENCODER_LEN, align=align)
     keys, emb = extract_embeddings(model, ds, device)
     logger.info("[%s] embedded %d samples, dim=%d", name, len(keys), emb.shape[1] if emb.size else 0)
     return keys, emb
+
+
+def build_tabular_df_for_gbm(raw: pd.DataFrame, champ_cols: list[str]) -> pd.DataFrame:
+    """`run_tabular_baseline.build_features`를 감싸되, 그 결과 중 F3 열(fsets["F3"])과 조인/라벨/타깃
+    키만 남긴다. build_features가 F3에 없는 부가열(예: `row_no` -- run_tabular_baseline.py 자체의
+    워밍업 행 필터링용 누적 카운터, 사실상 달력 시간의 대리 지표)도 같이 반환하는데, 예전 코드는
+    그 전체를 그대로 GBM 입력에 흘려보냈다(코드 리뷰에서 발견된 Critical 결함 -- train 행은 항상
+    val/OOT 행보다 row_no가 작아 트리가 그 열 하나로 시기를 구분해버릴 수 있었다). F3 스펙을
+    그대로 지킨다(spec §GBM 표 피처는 F3)."""
+    from training.run_tabular_baseline import build_features
+    built, fsets = build_features(raw, champ_cols)
+    keep = fsets["F3"] + ["ticker", "trade_date", "label", "label_vn", "next_day_return"]
+    out = built[keep].copy()
+    out["date_s"] = out["trade_date"].dt.strftime("%Y-%m-%d")
+    return out
 
 
 def prepare_gbm_meta_data(dsn: str | None, champion: dict, checkpoint_path: str, device,
@@ -69,14 +85,13 @@ def prepare_gbm_meta_data(dsn: str | None, champion: dict, checkpoint_path: str,
     cols = prep["kept_columns"]
 
     if tabular_df is None:
-        from training.run_tabular_baseline import build_features, load_frame
+        from training.run_tabular_baseline import load_frame
         raw = load_frame(dsn, champion["columns"])
-        tabular_df, _ = build_features(raw, champion["columns"])
-        tabular_df["date_s"] = tabular_df["trade_date"].dt.strftime("%Y-%m-%d")
+        tabular_df = build_tabular_df_for_gbm(raw, champion["columns"])
 
     out = {}
     # --- train ---
-    keys, emb = _embed_split("train", model, prep["train_frames"], cols, device)
+    keys, emb = _embed_split("train", model, prep["train_frames"], cols, device, align=opts["align"])
     joined = join_embeddings_with_tabular(keys, emb, tabular_df)
     joined = joined[joined["date_s"] <= TRAIN_END]
     assert_join_coverage(len(joined), len(keys), tabular_df["date_s"].le(TRAIN_END).sum(),
@@ -150,13 +165,23 @@ def fit_and_score(prepared: dict) -> dict:
 def render_doc(rec: dict, code_commit: str) -> str:
     L = ["# TFT 임베딩 + GBM 메타 모델 (Phase 1, 오프라인)", "",
         f"code_commit={code_commit}, chosen_n_iter={rec['chosen_n_iter']}, n_features={rec['n_features']}", "",
-        "| window | IC | IC IR | macro F1 |", "|---|---|---|---|"]
+        "| window | IC | SE | IC IR | macro F1 |", "|---|---|---|---|---|"]
     for w in ("val_2024", "oot_2026"):
         s = rec[w]["signal"]
-        L.append(f"| {w} | {s['mean_daily_rank_ic']:.4f} | {s.get('ic_ir') or float('nan'):.3f} | "
-                f"{rec[w]['metrics']['macro_f1']:.4f} |")
+        se = rec[w].get("ic_se")
+        L.append(f"| {w} | {s['mean_daily_rank_ic']:.4f} | {(f'{se:.4f}' if se is not None else 'n/a')} | "
+                f"{s.get('ic_ir') or float('nan'):.3f} | {rec[w]['metrics']['macro_f1']:.4f} |")
     L += ["", "선택: HGB n_iter는 train 내부 2023 분할(fit<=2022, select 2023)로만 골랐다 -- "
-         "val 2024/OOT 2026은 이 선택에 전혀 쓰이지 않았다.", ""]
+         "val 2024/OOT 2026은 이 선택에 전혀 쓰이지 않았다.", "",
+         "**임베딩 체크포인트 누수 주의**: 임베딩을 뽑은 R0 TFT 체크포인트 자체가 val 2024 loss "
+         "기준 얼리스토핑으로 선택됐다 -- 즉 이 임베딩은 이미 val 2024를 한 번 거쳐간 것이라, "
+         "여기 val_2024 IC는 OOT 2026 IC보다 다소 낙관적으로 읽어야 한다(OOT는 체크포인트 선택에 "
+         "전혀 영향을 주지 않았다). train 임베딩도 TFT 자신이 학습 때 본 구간에서 뽑은 것이라 "
+         "약한 스태킹 누수가 있다(업계 표준 관행, 선택 자체에는 영향 없음).", ""]
+    grid = {int(k): v for k, v in rec.get("select_ic_2023_by_iter", {}).items()}
+    if grid and rec["chosen_n_iter"] == max(grid):
+        L += [f"**그리드 경계 주의**: 선택된 n_iter={rec['chosen_n_iter']}는 시도한 그리드의 최댓값이고 "
+             "2023 select IC가 그 지점에서도 계속 오르고 있었다 -- 실제 최적값은 그리드 밖에 있을 수 있다.", ""]
     return "\n".join(L)
 
 
@@ -180,18 +205,39 @@ def record_model_version(rec: dict, path: str) -> None:
         rss.MODEL_VERSIONS_PATH = old
 
 
+def _git_commit() -> str:
+    import subprocess
+    try:
+        sha = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], text=True).strip()
+        dirty = subprocess.check_output(
+            ["git", "status", "--porcelain", "--", "training/run_gbm_meta.py", "training/tft_embeddings.py",
+             "training/gbm_meta_data.py", "training/run_tabular_baseline.py", "training/run_tfx_experiments.py",
+             "training/dataset.py", "training/config.py"], text=True).strip()
+        return sha + ("+dirty" if dirty else "")
+    except Exception:  # noqa: BLE001
+        return "unknown"
+
+
 def main(dsn=None, champion=None, checkpoint_path=CHECKPOINT_PATH, data=None, tabular_df=None,
         out_json=RESULT_JSON, doc_path=DOC_PATH, model_versions_path="docs/model_versions.md") -> int:
-    import subprocess
+    from training.run_tabular_baseline import HGB_PARAMS
+    from training.run_tfx_experiments import file_sha256
+    from training.stage1_data import DATA_VERSION
+
     champion = champion or json.load(open(CHAMPION_CONFIG_PATH))
     device = torch.device("cpu")
     prepared = prepare_gbm_meta_data(dsn, champion, checkpoint_path, device, data=data, tabular_df=tabular_df)
     rec = fit_and_score(prepared)
-    try:
-        commit = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], text=True).strip()
-    except Exception:  # noqa: BLE001
-        commit = "unknown"
+    commit = _git_commit()
     rec["code_commit"] = commit
+    try:
+        ck_sha = file_sha256(checkpoint_path)
+    except OSError:
+        ck_sha = None  # test doubles may pass a non-existent placeholder path
+    rec["meta"] = {
+        "seed": 0, "data_version": DATA_VERSION, "hgb_params": HGB_PARAMS,
+        "tft_checkpoint": {"path": checkpoint_path, "sha256": ck_sha},
+    }
     os.makedirs(os.path.dirname(out_json) or ".", exist_ok=True)
     with open(out_json, "w") as f:
         json.dump(rec, f, indent=2, ensure_ascii=False)

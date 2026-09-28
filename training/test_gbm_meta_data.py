@@ -1,3 +1,5 @@
+import logging
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -42,3 +44,12 @@ def test_assert_join_coverage_passes_when_ratio_met():
 def test_assert_join_coverage_raises_when_below_ratio():
     with pytest.raises(ValueError, match="coverage"):
         assert_join_coverage(n_joined=50, n_emb=100, n_tab=200, min_ratio=0.9, label="train")
+
+
+def test_assert_join_coverage_logs_the_ratio_even_when_it_passes(caplog):
+    # Code review finding (Important): a train join allowed to drop up to 5% (min_ratio=0.95) never
+    # logged how much was actually dropped -- a passing call was silent, so nobody running
+    # run_gbm_meta.py could tell whether 0% or 4.9% of train rows were lost to the join.
+    with caplog.at_level(logging.INFO, logger="training.gbm_meta_data"):
+        assert_join_coverage(n_joined=95, n_emb=100, n_tab=200, min_ratio=0.9, label="train")
+    assert any("train" in r.message and "0.95" in r.message for r in caplog.records)
