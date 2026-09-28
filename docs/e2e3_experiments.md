@@ -34,15 +34,15 @@ Across 3 seed(s): val IC mean 0.0246 +- 0.0215 (std, ddof=1), OOT IC mean 0.0276
 | **V3 v3_wd** | 0.0412 | 0.0142 | 0.214 | 185 | 0.05% | 0.05% | n/a | n/a | 0.3023 | 3 | 8 |
 | **V5 v5_lr_do_wd** | 0.0414 | 0.0138 | 0.220 | 185 | 0.10% | 0.10% | n/a | n/a | 0.3054 | 2 | 7 |
 | **V3-s1 v3_wd_seed1** | 0.0395 | 0.0139 | 0.210 | 185 | 0.05% | 0.05% | -0.41% | -0.41% | 0.3389 | 7 | 12 |
-| V4-s1 v4_lr_do_seed1 | _pending_ | | | | | | | | | | |
-| V3-s2 v3_wd_seed2 | _pending_ | | | | | | | | | | |
-| V4-s2 v4_lr_do_seed2 | _pending_ | | | | | | | | | | |
+| **V4-s1 v4_lr_do_seed1** | 0.0338 | 0.0109 | 0.228 | 185 | 0.16% | 0.16% | 0.12% | 0.12% | 0.3863 | 7 | 12 |
+| **V3-s2 v3_wd_seed2** | 0.0403 | 0.0141 | 0.210 | 185 | 0.05% | 0.05% | -0.35% | -0.35% | 0.3419 | 10 | 12 |
+| **V4-s2 v4_lr_do_seed2** | 0.0275 | 0.0107 | 0.189 | 185 | 0.09% | 0.09% | 0.04% | 0.04% | 0.3682 | 5 | 10 |
 | TFT champion (S3, legacy-aligned) | 0.0143 | 0.0108 | 0.098 | 184 | 0.14% | n/a | 0.29% | n/a | 0.3823 | n/a | n/a |
 | 1-day reversal (S3, legacy sample set) | 0.0625 | 0.0107 | 0.432 | 184 | 0.27% | n/a | 0.13% | n/a | n/a | n/a | n/a |
 | HGB reg (z), F3 (E0v2) | 0.0564 | 0.0099 | 0.417 | 185 | 0.21% | n/a | 0.14% | n/a | n/a | n/a | n/a |
 | HGB clf fixed label, F3 (E0v2) | 0.0578 | 0.0092 | 0.463 | 185 | 0.21% | n/a | 0.30% | n/a | n/a | n/a | n/a |
 
-Delta IC vs R0 seed 0: E3-s1 -0.0219, E3-s2 -0.0429, V4 0.0078, V1 -0.0014, V2 0.0004, V3 -0.0050, V5 -0.0048, V3-s1 -0.0068.
+Delta IC vs R0 seed 0: E3-s1 -0.0219, E3-s2 -0.0429, V4 0.0078, V1 -0.0014, V2 0.0004, V3 -0.0050, V5 -0.0048, V3-s1 -0.0068, V4-s1 -0.0125, V3-s2 -0.0060, V4-s2 -0.0188.
 
 ## oot_2026 (final checkpoint scored once; confirmation only, not a selection criterion)
 
@@ -57,15 +57,15 @@ Delta IC vs R0 seed 0: E3-s1 -0.0219, E3-s2 -0.0429, V4 0.0078, V1 -0.0014, V2 0
 | **V3 v3_wd** | 0.0392 | 0.0184 | 0.165 | 167 | 0.16% | 0.16% | n/a | n/a | 0.2888 | 3 | 8 |
 | **V5 v5_lr_do_wd** | 0.0217 | 0.0139 | 0.121 | 167 | -0.11% | -0.11% | n/a | n/a | 0.2697 | 2 | 7 |
 | **V3-s1 v3_wd_seed1** | 0.0392 | 0.0177 | 0.171 | 167 | 0.16% | 0.16% | n/a | n/a | 0.2843 | 7 | 12 |
-| V4-s1 v4_lr_do_seed1 | _pending_ | | | | | | | | | | |
-| V3-s2 v3_wd_seed2 | _pending_ | | | | | | | | | | |
-| V4-s2 v4_lr_do_seed2 | _pending_ | | | | | | | | | | |
+| **V4-s1 v4_lr_do_seed1** | 0.0393 | 0.0128 | 0.238 | 167 | 0.15% | 0.15% | 0.13% | 0.13% | 0.3441 | 7 | 12 |
+| **V3-s2 v3_wd_seed2** | 0.0400 | 0.0175 | 0.177 | 167 | 0.16% | 0.16% | n/a | n/a | 0.2740 | 10 | 12 |
+| **V4-s2 v4_lr_do_seed2** | 0.0388 | 0.0146 | 0.205 | 167 | 0.03% | 0.03% | -0.24% | -0.24% | 0.3257 | 5 | 10 |
 | TFT champion (S3, legacy-aligned) | -0.0049 | 0.0154 | -0.025 | 167 | -0.13% | n/a | -0.54% | n/a | 0.3420 | n/a | n/a |
 | 1-day reversal (S3, legacy sample set) | 0.0427 | 0.0155 | 0.212 | 167 | 0.29% | n/a | 0.19% | n/a | n/a | n/a | n/a |
 | HGB reg (z), F3 (E0v2) | 0.0308 | 0.0129 | 0.184 | 167 | 0.11% | n/a | -0.61% | n/a | n/a | n/a | n/a |
 | HGB clf fixed label, F3 (E0v2) | 0.0371 | 0.0135 | 0.212 | 167 | 0.09% | n/a | -0.38% | n/a | n/a | n/a | n/a |
 
-Delta IC vs R0 seed 0: E3-s1 -0.0100, E3-s2 -0.0257, V4 -0.0047, V1 -0.0056, V2 -0.0119, V3 -0.0002, V5 -0.0177, V3-s1 -0.0003.
+Delta IC vs R0 seed 0: E3-s1 -0.0100, E3-s2 -0.0257, V4 -0.0047, V1 -0.0056, V2 -0.0119, V3 -0.0002, V5 -0.0177, V3-s1 -0.0003, V4-s1 -0.0001, V3-s2 0.0005, V4-s2 -0.0007.
 
 ## Hyper-parameters, selected epochs and val curves (all recipes)
 
@@ -79,9 +79,9 @@ Delta IC vs R0 seed 0: E3-s1 -0.0100, E3-s2 -0.0257, V4 -0.0047, V1 -0.0056, V2 
 | V3 v3_wd | 0.000290589 | 0.1658 | 0.001 | 32 | val_ic | 3 | 0.0412 | 1.0949 | early_stopping |
 | V5 v5_lr_do_wd | 0.0001 | 0.3 | 0.001 | 32 | val_ic | 2 | 0.0414 | 1.0947 | early_stopping |
 | V3-s1 v3_wd_seed1 | 0.000290589 | 0.1658 | 0.001 | 32 | val_ic | 7 | 0.0395 | 1.0942 | early_stopping |
-| V4-s1 v4_lr_do_seed1 | _pending_ | | | | | | | | |
-| V3-s2 v3_wd_seed2 | _pending_ | | | | | | | | |
-| V4-s2 v4_lr_do_seed2 | _pending_ | | | | | | | | |
+| V4-s1 v4_lr_do_seed1 | 0.0001 | 0.3 | 0 | 32 | val_ic | 7 | 0.0338 | 1.0910 | early_stopping |
+| V3-s2 v3_wd_seed2 | 0.000290589 | 0.1658 | 0.001 | 32 | val_ic | 10 | 0.0403 | 1.0938 | max_epochs |
+| V4-s2 v4_lr_do_seed2 | 0.0001 | 0.3 | 0 | 32 | val_ic | 5 | 0.0275 | 1.0897 | early_stopping |
 
 Per-epoch val curves (`*` = selected epoch):
 
@@ -93,5 +93,8 @@ Per-epoch val curves (`*` = selected epoch):
 - **V3 v3_wd**: 0: IC 0.0262 / loss 1.1000; 1: IC 0.0395 / loss 1.1012; 2: IC 0.0359 / loss 1.0998; 3*: IC 0.0412 / loss 1.1015; 4: IC 0.0404 / loss 1.1081; 5: IC 0.0398 / loss 1.0949; 6: IC 0.0402 / loss 1.0979; 7: IC 0.0405 / loss 1.0997
 - **V5 v5_lr_do_wd**: 0: IC 0.0384 / loss 1.0947; 1: IC 0.0414 / loss 1.1012; 2*: IC 0.0414 / loss 1.0995; 3: IC 0.0397 / loss 1.1000; 4: IC 0.0388 / loss 1.1086; 5: IC 0.0394 / loss 1.0973; 6: IC 0.0395 / loss 1.0992
 - **V3-s1 v3_wd_seed1**: 0: IC 0.0386 / loss 1.1027; 1: IC 0.0386 / loss 1.0980; 2: IC 0.0376 / loss 1.1002; 3: IC 0.0381 / loss 1.1034; 4: IC 0.0386 / loss 1.0965; 5: IC 0.0373 / loss 1.0989; 6: IC 0.0387 / loss 1.0998; 7*: IC 0.0395 / loss 1.0982; 8: IC 0.0392 / loss 1.0987; 9: IC 0.0380 / loss 1.0985; 10: IC 0.0109 / loss 1.1018; 11: IC 0.0387 / loss 1.0942
+- **V4-s1 v4_lr_do_seed1**: 0: IC 0.0181 / loss 1.1021; 1: IC 0.0051 / loss 1.0910; 2: IC 0.0093 / loss 1.0917; 3: IC 0.0015 / loss 1.0959; 4: IC 0.0196 / loss 1.0942; 5: IC 0.0180 / loss 1.0948; 6: IC 0.0303 / loss 1.0958; 7*: IC 0.0338 / loss 1.0930; 8: IC 0.0321 / loss 1.0974; 9: IC 0.0290 / loss 1.0981; 10: IC 0.0215 / loss 1.1112; 11: IC 0.0334 / loss 1.1052
+- **V3-s2 v3_wd_seed2**: 0: IC 0.0350 / loss 1.0997; 1: IC 0.0392 / loss 1.1081; 2: IC 0.0390 / loss 1.1060; 3: IC 0.0375 / loss 1.0969; 4: IC 0.0395 / loss 1.0975; 5: IC 0.0389 / loss 1.0993; 6: IC 0.0397 / loss 1.0975; 7: IC 0.0402 / loss 1.0986; 8: IC 0.0394 / loss 1.0978; 9: IC 0.0227 / loss 1.1014; 10*: IC 0.0403 / loss 1.0938; 11: IC 0.0402 / loss 1.1012
+- **V4-s2 v4_lr_do_seed2**: 0: IC -0.0121 / loss 1.0907; 1: IC -0.0004 / loss 1.0935; 2: IC -0.0049 / loss 1.0932; 3: IC 0.0242 / loss 1.0897; 4: IC 0.0077 / loss 1.0922; 5*: IC 0.0275 / loss 1.0968; 6: IC 0.0092 / loss 1.0963; 7: IC 0.0149 / loss 1.1005; 8: IC 0.0115 / loss 1.1076; 9: IC 0.0130 / loss 1.1094
 
 Comparison rows (reversal, HGB) are from the S3 / E0v2 JSON files; legacy-aligned or old-data, raw spreads only, **not like-for-like** with the aligned TFT rows.
