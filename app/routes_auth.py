@@ -11,6 +11,7 @@ from app.crud_users import get_user_by_email
 from app.security import verify_password
 from app.jwt import create_access_token, new_refresh_token_pair, hash_refresh_token
 from app.google_oauth import verify_google_id_token
+from app.auth_redirect import frontend_redirect_url
 from app.models import User
 from app.crud_refresh import (
     create_refresh_token,
@@ -264,6 +265,12 @@ async def google_login(code: str, db: Session = Depends(get_db)):
         token_hash=rt_hash,
         expires_at=rt["expires_at"],
     )
+
+    # 프론트는 /auth/google/callback?access_token=&refresh_token= 리다이렉트를 기대한다.
+    # FRONTEND_GOOGLE_CALLBACK_URL 이 설정된 환경에서만 리다이렉트하고, 미설정이면 기존 JSON 응답을 유지한다.
+    front_cb = os.getenv("FRONTEND_GOOGLE_CALLBACK_URL")
+    if front_cb:
+        return RedirectResponse(url=frontend_redirect_url(front_cb, access_token, rt["raw"]))
 
     return {
         "access_token": access_token,

@@ -17,7 +17,8 @@ from app.strategy_factory import create_strategy
 from backtest.engine.risk import Portfolio
 from typing import Optional
 
-from app.strategy_factory import create_strategy, get_warmup_count, get_timeframe
+from app.strategy_factory import create_strategy, get_warmup_count, get_timeframe, resolve_strategy_id
+from app.trade_helpers import no_auto_basket_message, trade_log_to_dict
 
 import pandas as pd
 import os
@@ -640,10 +641,7 @@ async def start_trading(
     if not items and excluded_manual_tickers:
         raise HTTPException(
             status_code=400,
-            detail={
-                "message": "자동매매 가능한 바구니 종목이 없습니다. 직접매매 종목은 자동매매에서 제외됩니다.",
-                "excluded_manual_tickers": excluded_manual_tickers,
-            },
+            detail=no_auto_basket_message(excluded_manual_tickers),
         )
     if not items:
         raise HTTPException(status_code=400, detail="바구니가 비어있습니다")
@@ -654,12 +652,16 @@ async def start_trading(
     print(f"[User {user_id}] 자동매매 대상 종목: {tickers}")
 
     warmup_requests = []
+    resolved_strategies = {}
     for ticker in tickers:
         strategy_id = "ultra_safe"
         for ts in payload.ticker_strategies:
             if ts.ticker == ticker:
                 strategy_id = ts.strategy_id
                 break
+        resolved_strategies[ticker] = resolve_strategy_id(strategy_id)
+        if resolved_strategies[ticker]["fallback"]:
+            print(f"[User {user_id}] 전략 '{strategy_id}' 미지원 -> conservative 로 대체 ({ticker})")
         warmup_requests.append({
             "ticker": ticker,
             "timeframe": get_timeframe(strategy_id),
@@ -695,6 +697,7 @@ async def start_trading(
             "status": "RUNNING",
             "tickers": tickers,
             "excluded_manual_tickers": excluded_manual_tickers,
+            "strategies": resolved_strategies,
             "message": "데모 자동매매 시작: AI 서버에 START 커맨드를 전달했습니다.",
         }
 
@@ -714,6 +717,7 @@ async def start_trading(
         "status": "RUNNING",
         "tickers": tickers,
         "excluded_manual_tickers": excluded_manual_tickers,
+        "strategies": resolved_strategies,
         "message": "자동매매 시작 (5분 주기)",
     }
     
@@ -768,10 +772,7 @@ async def execute_once(
     if not items and excluded_manual_tickers:
         raise HTTPException(
             status_code=400,
-            detail={
-                "message": "자동매매 가능한 바구니 종목이 없습니다. 직접매매 종목은 자동매매에서 제외됩니다.",
-                "excluded_manual_tickers": excluded_manual_tickers,
-            },
+            detail=no_auto_basket_message(excluded_manual_tickers),
         )
     if not items:
         raise HTTPException(status_code=400, detail="바구니가 비어있습니다")
@@ -847,18 +848,5 @@ def get_trade_history(
         .order_by(TradeLog.created_at.desc())\
         .limit(100).all()
 
-    return [
-        {
-            "ticker": log.ticker,
-            "side": log.side,
-            "qty": log.qty,
-            "price": log.price,
-            "amount": log.amount,
-            "ai_signal": log.ai_signal,
-            "ai_confidence": log.ai_confidence,
-            "strategy_id": log.strategy_id,
-            "created_at": log.created_at.isoformat(),
-        }
-        for log in logs
-    ]
+    return [trade_log_to_dict(log) for log in logs]
 
