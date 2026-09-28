@@ -79,7 +79,12 @@ def timing_decomposition(dates, tickers, scores, returns, prior_ticker_means: di
     fe = np.array([means.get(tk, np.nan) for tk in tick_a.tolist()], dtype=float)
     v2 = valid & np.isfinite(fe)
     fixed_ics, _ = _daily(dates_a[v2], fe[v2], ret_a[v2], min_names)
-    timing_ics, timing_q = _daily(dates_a[v2], (score_a - fe)[v2], ret_a[v2], min_names)
+    timing = score_a - fe
+    # A purely static scorer (a per-ticker constant) leaves float residuals ~1e-17 whose ranks are arbitrary and
+    # produce a spurious non-zero timing IC; snap them to 0 so such days are constant -> skipped (undefined).
+    scale = max(float(np.nanmax(np.abs(score_a[valid]))) if valid.any() else 0.0, 1e-300)
+    timing = np.where(np.abs(timing) < 1e-12 * scale, 0.0, timing)
+    timing_ics, timing_q = _daily(dates_a[v2], timing[v2], ret_a[v2], min_names)
 
     out = {}
     for key, ics in (("raw", raw_ics), ("fixed", fixed_ics), ("timing", timing_ics)):
