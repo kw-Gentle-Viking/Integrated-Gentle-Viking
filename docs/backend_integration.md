@@ -23,3 +23,9 @@
 - 엔진: 종가 동시 체결, `np.random` 지정가 체결(시드 없음), 소수점 주식.
 - `/backtest/strategies`에 나오는 aggressive/balanced/conservative/ultra_safe 는 `BacktestService._load_strategy`에 없음("Unknown strategy").
 - 신호 정의: 절대 확률 임계값은 기간 간 분포가 달라 불안정(OOT 점수가 val 분포 밖). 매매에 쓰려면 종목 간 일별 순위(200종목 배치 추론)가 필요.
+
+## 2026-09-28 추가 수정 (Back `ai-fit` d24279e~, Front `ai-fit` 4fd1017)
+Back: `/trade/history` status 포함, 전략 대체 사실을 `/trade/start` 응답 `strategies`로 노출, 에러 detail 문자열화, Google 콜백 리다이렉트(`FRONTEND_GOOGLE_CALLBACK_URL`),
+인증 공백 수정(`/users/{id}` 본인만, `/users` 목록 `ENABLE_DEBUG_ENDPOINTS`, `/account/assets`·`/ai/agreement` 로그인, `/ai/commands/*`·`POST /prices` 서비스 키),
+`APP_ENV=production` 이면 dev 시크릿/`LOCAL_DEMO_MODE`로 기동 거부. AI 폴러(`poll_commands.py`)는 `GCP_BACKEND_API_KEY`를 Bearer로 보내므로 백엔드 `AI_COMMAND_API_KEY`에 같은 값을 설정.
+Front(로직만, UI 무변경): 새로고침이 `job_id`(GET /ai/once/{job_id})로 새 결과 도착을 확인한 뒤에만 채택, `total_capital`을 '1주 가격 합'으로 보내지 않음(서버가 예수금 조회), FAILED 주문은 체결 내역에서 제외, 토큰 갱신 single-flight.
