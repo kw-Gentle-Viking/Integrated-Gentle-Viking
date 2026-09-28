@@ -51,10 +51,11 @@ classified into exactly one bucket):
 KNOWN_FUTURE_COLS handling (not one of the 33 champion "historical" columns, but still part of
 encoder_df since serving.inference.run_inference reads future_cols/static_cols off the same
 frame):
-  - time_progress: synthetic, not a stored column. Historical (real) days use the constant 1.0
-    (matches training.stage1_data.TIME_PROGRESS_CONSTANT / Task 12-13's precedent: the model was
-    trained single-step, so "fully elapsed" is the only meaningful value for a past day). Today's
-    row uses `compute_time_progress(now)`: (now - 09:00) / (15:30 - 09:00), clamped to [0, 1].
+  - time_progress: synthetic, not a stored column. EVERY row -- historical and today -- uses the
+    constant 1.0 (training.stage1_data.TIME_PROGRESS_CONSTANT: training feeds 1.0 on all rows
+    including the target row, so any other value would be out-of-distribution input). (Before
+    2026-09-28 today's row used `compute_time_progress(now)` in [0, 1]; that was a train/serve
+    mismatch and was removed. The helper is kept for informational use only.)
   - is_bok / is_fomc / is_witching_kr / is_witching_us: these ARE real feature_pool columns for
     the 59 historical days (joined from market_events at build_features.py time). For "today",
     the honest answer would be a real calendar lookup -- these are nominally "known in advance"
@@ -87,8 +88,9 @@ from training.dataset import build_incomplete_today_bar
 MARKET_OPEN = dtime(9, 0)
 MARKET_CLOSE = dtime(15, 30)
 
-# Historical time_progress constant for real (past) trading days -- matches
-# training.stage1_data.TIME_PROGRESS_CONSTANT.
+# time_progress constant used for ALL rows fed to the model (past days AND today) -- must equal
+# training.stage1_data.TIME_PROGRESS_CONSTANT (pinned by a test; not imported here to keep
+# psycopg2/training imports off the serving import path).
 HISTORICAL_TIME_PROGRESS = 1.0
 
 # The 4 real feature_pool columns backing 4 of the 5 KNOWN_FUTURE_COLS (time_progress is
@@ -118,7 +120,10 @@ FFILL_COLS = [
 
 
 def compute_time_progress(now: datetime) -> float:
-    """(now - market_open) / (market_close - market_open), clamped to [0, 1]."""
+    """(now - market_open) / (market_close - market_open), clamped to [0, 1].
+
+    INFORMATIONAL ONLY -- deliberately NOT used as a model input: training always feeds the
+    constant 1.0 (see HISTORICAL_TIME_PROGRESS), so this 0~1 value would be out-of-distribution."""
     open_dt = datetime.combine(now.date(), MARKET_OPEN)
     close_dt = datetime.combine(now.date(), MARKET_CLOSE)
     if now <= open_dt:
@@ -231,7 +236,12 @@ def build_encoder_df(
                 )
         for col in future_cols:
             if col == "time_progress":
-                row[col] = compute_time_progress(now)
+                # Training feeds the constant 1.0 on EVERY row, including the target row
+                # (training.stage1_data.TIME_PROGRESS_CONSTANT). Feeding compute_time_progress(now)
+                # (0~1 during the session) would hand the model a value it never saw in training,
+                # so today's row uses the same constant as history. compute_time_progress is kept
+                # only as an informational helper -- it must not reach the model input.
+                row[col] = HISTORICAL_TIME_PROGRESS
             elif col in FUTURE_DB_COLS:
                 row[col] = 0.0  # see docstring: no forward-populated calendar in this task's scope
             else:

@@ -210,3 +210,28 @@ def test_build_encoder_df_for_ticker_raises_on_insufficient_history(monkeypatch)
             HISTORICAL_COLS, FUTURE_COLS, STATIC_COLS,
             now=datetime(2026, 9, 9, 9, 10), n_days=59,
         )
+
+
+# ---------------------------------------------------------------------------
+# time_progress parity with training (2026-09-28): training feeds the constant 1.0 on EVERY row
+# (training.stage1_data.TIME_PROGRESS_CONSTANT); serving must not feed the model a 0~1 value it
+# never saw during training.
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("hour,minute", [(9, 0), (9, 10), (12, 15), (15, 30)])
+def test_today_time_progress_equals_training_constant_at_any_time_of_day(hour, minute):
+    from training.stage1_data import TIME_PROGRESS_CONSTANT
+
+    history = _make_history_rows(59)
+    today_rows = [{"datetime": datetime(2026, 9, 9, 9, 0), "open": 105.0, "high": 106.0,
+                    "low": 104.5, "close": 105.5, "volume": 1000}]
+    now = datetime(2026, 9, 9, hour, minute)
+    df = build_encoder_df("005930", history, today_rows, now, HISTORICAL_COLS, FUTURE_COLS, STATIC_COLS)
+    assert df["time_progress"].iloc[-1] == TIME_PROGRESS_CONSTANT
+    assert (df["time_progress"] == TIME_PROGRESS_CONSTANT).all()
+
+
+def test_historical_time_progress_constant_matches_training():
+    from serving.feature_builder import HISTORICAL_TIME_PROGRESS
+    from training.stage1_data import TIME_PROGRESS_CONSTANT
+
+    assert HISTORICAL_TIME_PROGRESS == TIME_PROGRESS_CONSTANT
