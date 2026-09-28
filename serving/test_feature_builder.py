@@ -235,3 +235,125 @@ def test_historical_time_progress_constant_matches_training():
     from training.stage1_data import TIME_PROGRESS_CONSTANT
 
     assert HISTORICAL_TIME_PROGRESS == TIME_PROGRESS_CONSTANT
+
+
+# ---------------------------------------------------------------------------
+# History integrity guard (2026-09-28)
+# ---------------------------------------------------------------------------
+from datetime import timedelta  # noqa: E402
+
+from serving.feature_builder import HistoryIntegrityError, validate_history_rows  # noqa: E402
+
+_TODAY_ROWS = [{"datetime": datetime(2026, 9, 9, 9, 0), "open": 105.0, "high": 106.0,
+                "low": 104.5, "close": 105.5, "volume": 1000}]
+_NOW = datetime(2026, 9, 9, 10, 0)  # Wednesday; _make_history_rows ends 2026-09-08
+
+
+def test_guard_excludes_a_row_already_dated_today():
+    history = _make_history_rows(60)  # last row is 2026-09-08 ... shift so the last row is today
+    for r in history:
+        r["trade_date"] = r["trade_date"] + timedelta(days=1)
+    assert history[-1]["trade_date"] == date(2026, 9, 9)
+    kept = validate_history_rows(history, today=date(2026, 9, 9))
+    assert len(kept) == 59
+    assert all(r["trade_date"] < date(2026, 9, 9) for r in kept)
+
+
+def test_build_encoder_df_does_not_duplicate_today_when_feature_pool_already_has_it():
+    history = _make_history_rows(60)
+    for r in history:
+        r["trade_date"] = r["trade_date"] + timedelta(days=1)  # last real row dated today
+    df = build_encoder_df("005930", history, _TODAY_ROWS, _NOW, HISTORICAL_COLS, FUTURE_COLS, STATIC_COLS)
+    assert len(df) == 60  # 59 history (today's dropped) + 1 assembled today row, not 61
+
+
+def test_guard_rejects_rows_after_today():
+    history = _make_history_rows(59)
+    with pytest.raises(HistoryIntegrityError, match="after today"):
+        validate_history_rows(history, today=date(2026, 9, 5))
+
+
+def test_guard_rejects_stale_history_gap_over_5_calendar_days():
+    history = _make_history_rows(59)  # last 2026-09-08
+    validate_history_rows(history, today=date(2026, 9, 13))  # gap 5 -> ok
+    with pytest.raises(HistoryIntegrityError, match="gap"):
+        validate_history_rows(history, today=date(2026, 9, 14))  # gap 6
+
+
+def test_build_encoder_df_raises_on_stale_history():
+    history = _make_history_rows(59)
+    with pytest.raises(HistoryIntegrityError):
+        build_encoder_df("005930", history, [], datetime(2026, 9, 20, 10, 0),
+                         HISTORICAL_COLS, FUTURE_COLS, STATIC_COLS)
+
+
+def test_guard_with_market_dates_detects_missing_trading_day_even_when_gap_is_small():
+    history = _make_history_rows(59)  # last 2026-09-08
+    today = date(2026, 9, 11)
+    # the market traded on 09-09 and 09-10, but this ticker has no rows for them
+    with pytest.raises(HistoryIntegrityError, match="missing"):
+        validate_history_rows(history, today=today, market_dates={date(2026, 9, 9), date(2026, 9, 10)},
+                              market_covered_until=date(2026, 9, 10))
+
+
+def test_guard_with_market_dates_accepts_long_holiday_gap_when_market_did_not_trade():
+    history = _make_history_rows(59)  # last 2026-09-08
+    # nothing traded for a week (holiday block); calendar-day fallback would reject an 8-day gap
+    kept = validate_history_rows(history, today=date(2026, 9, 16), market_dates=set(),
+                                 market_covered_until=date(2026, 9, 15))
+    assert len(kept) == 59
+
+
+def test_guard_rejects_unsorted_rows():
+    history = _make_history_rows(59)
+    history[10], history[11] = history[11], history[10]
+    with pytest.raises(HistoryIntegrityError, match="ascending"):
+        validate_history_rows(history, today=date(2026, 9, 9))
+
+
+def test_guard_rejects_duplicate_dates():
+    history = _make_history_rows(59)
+    history[20]["trade_date"] = history[19]["trade_date"]
+    with pytest.raises(HistoryIntegrityError, match="duplicate"):
+        validate_history_rows(history, today=date(2026, 9, 9))
+
+
+def test_guard_rejects_empty_history_and_history_only_containing_today():
+    with pytest.raises(HistoryIntegrityError):
+        validate_history_rows([], today=date(2026, 9, 9))
+    only_today = _make_history_rows(1)
+    only_today[0]["trade_date"] = date(2026, 9, 9)
+    with pytest.raises(HistoryIntegrityError):
+        validate_history_rows(only_today, today=date(2026, 9, 9))
+
+
+def test_build_encoder_df_for_ticker_passes_today_and_market_dates_to_fetch_and_guard(monkeypatch):
+    import serving.feature_builder as fb
+
+    history = _make_history_rows(59)
+    seen = {}
+
+    def fake_fetch(dsn, ticker, hcols, scols, n_days=59, today=None):
+        seen["today"] = today
+        return history
+
+    monkeypatch.setattr(fb, "fetch_feature_pool_history", fake_fetch)
+    monkeypatch.setattr(fb, "fetch_market_trading_dates",
+                        lambda dsn, start, end: ({date(2026, 9, 9)}, date(2026, 9, 9)))
+    monkeypatch.setattr(fb, "fetch_today_intraday_rows", lambda *a, **k: [])
+    # market traded on 09-09 but the ticker's history stops at 09-08 and today is 09-10
+    with pytest.raises(HistoryIntegrityError, match="missing"):
+        fb.build_encoder_df_for_ticker("005930", "v2", "prod", HISTORICAL_COLS, FUTURE_COLS, STATIC_COLS,
+                                       now=datetime(2026, 9, 10, 10, 0))
+    assert seen["today"] == date(2026, 9, 10)
+
+
+def test_build_encoder_df_for_ticker_falls_back_when_market_dates_unavailable(monkeypatch):
+    import serving.feature_builder as fb
+
+    monkeypatch.setattr(fb, "fetch_feature_pool_history", lambda *a, **k: _make_history_rows(59))
+    monkeypatch.setattr(fb, "fetch_market_trading_dates", lambda *a, **k: (None, None))
+    monkeypatch.setattr(fb, "fetch_today_intraday_rows", lambda *a, **k: [])
+    df = fb.build_encoder_df_for_ticker("005930", "v2", "prod", HISTORICAL_COLS, FUTURE_COLS, STATIC_COLS,
+                                        now=_NOW)
+    assert len(df) == 60

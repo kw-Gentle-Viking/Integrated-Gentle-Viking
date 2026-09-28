@@ -133,6 +133,79 @@ def compute_time_progress(now: datetime) -> float:
     return (now - open_dt).total_seconds() / (close_dt - open_dt).total_seconds()
 
 
+# ---------------------------------------------------------------------------
+# History integrity guard (2026-09-28)
+# ---------------------------------------------------------------------------
+# Default max calendar-day distance between the last history row and "today" when no market
+# trading-date list is available (weekend + one holiday fits; a week+ gap means stale data).
+MAX_HISTORY_GAP_DAYS = 5
+
+
+class HistoryIntegrityError(ValueError):
+    """feature_pool history is not a trustworthy, gap-free run of days ending right before today."""
+
+
+def _as_date(d) -> date:
+    return d.date() if isinstance(d, datetime) else d
+
+
+def validate_history_rows(
+    rows: list[dict],
+    today: date | None = None,
+    market_dates: set[date] | None = None,
+    market_covered_until: date | None = None,
+    max_gap_days: int = MAX_HISTORY_GAP_DAYS,
+) -> list[dict]:
+    """Validate a ticker's feature_pool history and return the rows to actually use.
+
+    (c) rows must be in strictly ascending trade_date order with no duplicate dates.
+    (a) a row already dated `today` (e.g. the day's batch already landed in feature_pool) is
+        dropped -- "today" is assembled separately, so keeping it would duplicate the day.
+        Rows dated AFTER today are look-ahead and raise.
+    (b) the history must end right before today: if `market_dates` (the market's real trading
+        dates, from feature_pool itself) is given, the ticker must not lack any of the market's
+        trading dates in (last_row, today); in all cases the distance between the newest known
+        date (the ticker's last row, or `market_covered_until` if later) and today must not
+        exceed `max_gap_days` calendar days. Without `market_dates` only the calendar-day rule
+        applies. (stock_db_v2.calendar.is_market_open is NOT used: it is weekday-based and misses
+        Korean holidays -- 119 days disagree with feature_pool's actual trading dates.)
+    Raises HistoryIntegrityError explicitly instead of letting a stale/holey window through.
+    """
+    if not rows:
+        raise HistoryIntegrityError("no feature_pool history rows")
+    dates = [_as_date(r["trade_date"]) for r in rows]
+    for prev, cur in zip(dates, dates[1:]):
+        if cur == prev:
+            raise HistoryIntegrityError(f"duplicate trade_date {cur} in history")
+        if cur < prev:
+            raise HistoryIntegrityError(
+                f"history rows must be in ascending trade_date order ({cur} follows {prev})")
+    if today is None:
+        return list(rows)
+    today = _as_date(today)
+    if dates[-1] > today:
+        raise HistoryIntegrityError(
+            f"history contains rows dated after today ({dates[-1]} > {today}) -- look-ahead")
+    kept = [r for r, d in zip(rows, dates) if d < today]
+    if not kept:
+        raise HistoryIntegrityError(f"no history rows before today ({today})")
+    last = _as_date(kept[-1]["trade_date"])
+    if market_dates is not None:
+        missing = sorted(d for d in market_dates if last < d < today)
+        if missing:
+            shown = ", ".join(str(d) for d in missing[:5])
+            raise HistoryIntegrityError(
+                f"history ends {last} but the market traded on {len(missing)} later day(s) before "
+                f"today ({today}); missing trading days: {shown}")
+    newest_known = max(last, market_covered_until) if (market_dates is not None and market_covered_until) else last
+    gap = (today - newest_known).days
+    if gap > max_gap_days:
+        raise HistoryIntegrityError(
+            f"stale history: last known trading date {newest_known} is {gap} calendar days before "
+            f"today ({today}) (gap limit {max_gap_days})")
+    return kept
+
+
 def _sma_inclusive(values: list[float], window: int) -> float:
     """Trailing SMA over the last `window` values (fewer if unavailable) -- matches
     build_features.py's `rolling(window=N, min_periods=1).mean()` semantics, where the window
@@ -173,6 +246,8 @@ def build_encoder_df(
     historical_cols: list[str],
     future_cols: list[str],
     static_cols: list[str],
+    market_dates: set[date] | None = None,
+    market_covered_until: date | None = None,
 ) -> pd.DataFrame:
     """Pure computation, no DB access -- unit-testable with synthetic rows (see
     serving/test_feature_builder.py), matching the pattern already established by
@@ -184,12 +259,21 @@ def build_encoder_df(
         row looks like).
     today_intraday_rows: today's live 5-min bars so far, each a dict with
         datetime/open/high/low/close/volume (production stock_db.intraday_5min shape).
-    now: current wall-clock datetime (KST), used for time_progress and day_of_week.
+    now: current wall-clock datetime (KST), used for day_of_week (time_progress is the constant
+        1.0, see module docstring).
+    market_dates / market_covered_until: optional market trading-date info for the gap guard
+        (see validate_history_rows). Rows already dated today are dropped; ordering/duplicate/
+        stale-gap violations raise HistoryIntegrityError.
     """
     if not history_rows:
         raise ValueError(f"build_encoder_df: no feature_pool history rows for ticker={ticker!r}")
 
-    hist_sorted = sorted(history_rows, key=lambda r: r["trade_date"])
+    try:
+        hist_sorted = validate_history_rows(
+            history_rows, today=now.date(), market_dates=market_dates,
+            market_covered_until=market_covered_until)
+    except HistoryIntegrityError as e:
+        raise HistoryIntegrityError(f"ticker={ticker!r}: {e}") from e
     closes = [float(r["close_price"]) for r in hist_sorted]
     last_row = hist_sorted[-1]
 
@@ -270,26 +354,30 @@ def build_encoder_df(
 # ============================================================
 
 def fetch_feature_pool_history(dsn: str, ticker: str, historical_cols: list[str],
-                                static_cols: list[str], n_days: int = 59) -> list[dict]:
+                                static_cols: list[str], n_days: int = 59,
+                                today: date | None = None) -> list[dict]:
     """SELECT-only read from stock_db_v2.feature_pool: the ticker's most recent `n_days` real
     trading-day rows, oldest-first, including close_price (see module docstring) and
-    FUTURE_DB_COLS."""
+    FUTURE_DB_COLS. If `today` is given, rows dated today or later are excluded in SQL (today is
+    assembled separately; a same-day feature_pool row would otherwise duplicate it)."""
     import psycopg2
 
     cols = ["trade_date", "close_price"] + historical_cols + FUTURE_DB_COLS + static_cols
     seen = set()
     cols = [c for c in cols if not (c in seen or seen.add(c))]  # dedupe, preserve order
     col_sql = ", ".join(cols)
+    date_filter = "AND trade_date < %s" if today is not None else ""
     query = f"""
         SELECT {col_sql} FROM feature_pool
-        WHERE ticker = %s
+        WHERE ticker = %s {date_filter}
         ORDER BY trade_date DESC
         LIMIT %s
     """
+    params = (ticker, today, n_days) if today is not None else (ticker, n_days)
     conn = psycopg2.connect(dsn)
     try:
         with conn.cursor() as cur:
-            cur.execute(query, (ticker, n_days))
+            cur.execute(query, params)
             rows = cur.fetchall()
             colnames = [d[0] for d in cur.description]
     finally:
@@ -297,6 +385,29 @@ def fetch_feature_pool_history(dsn: str, ticker: str, historical_cols: list[str]
     result = [dict(zip(colnames, r)) for r in rows]
     result.sort(key=lambda r: r["trade_date"])
     return result
+
+
+def fetch_market_trading_dates(dsn: str, start: date, end: date) -> tuple[set[date] | None, date | None]:
+    """SELECT-only: the market's real trading dates strictly between `start` and `end`, taken from
+    feature_pool itself (distinct trade_date), plus the newest trade_date feature_pool has at all.
+    Returns (None, None) if it cannot be read, so callers fall back to the calendar-day rule.
+    Deliberately not stock_db_v2.calendar: its is_market_open ignores Korean holidays."""
+    import psycopg2
+
+    try:
+        conn = psycopg2.connect(dsn)
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT DISTINCT trade_date FROM feature_pool "
+                            "WHERE trade_date > %s AND trade_date < %s", (start, end))
+                dates = {r[0] for r in cur.fetchall()}
+                cur.execute("SELECT MAX(trade_date) FROM feature_pool")
+                covered = cur.fetchone()[0]
+        finally:
+            conn.close()
+    except Exception:
+        return None, None
+    return dates, covered
 
 
 def fetch_today_intraday_rows(prod_dsn: str, ticker: str, today: date) -> list[dict]:
@@ -331,7 +442,8 @@ def build_encoder_df_for_ticker(
 ) -> pd.DataFrame:
     """Orchestrates the two read-only DB fetches above and calls the pure build_encoder_df."""
     now = now or datetime.now()
-    history_rows = fetch_feature_pool_history(v2_dsn, ticker, historical_cols, static_cols, n_days=n_days)
+    history_rows = fetch_feature_pool_history(v2_dsn, ticker, historical_cols, static_cols,
+                                              n_days=n_days, today=now.date())
     if not history_rows:
         raise ValueError(f"no feature_pool history found for ticker={ticker!r}")
     if len(history_rows) < n_days:
@@ -344,6 +456,9 @@ def build_encoder_df_for_ticker(
             f"rows found in feature_pool for ticker={ticker!r} -- too little history to serve "
             f"a reliable prediction (e.g. a newly-listed ticker)."
         )
+    last_date = _as_date(history_rows[-1]["trade_date"])
+    market_dates, covered_until = fetch_market_trading_dates(v2_dsn, last_date, now.date())
     today_intraday_rows = fetch_today_intraday_rows(prod_dsn, ticker, now.date())
     return build_encoder_df(ticker, history_rows, today_intraday_rows, now,
-                             historical_cols, future_cols, static_cols)
+                             historical_cols, future_cols, static_cols,
+                             market_dates=market_dates, market_covered_until=covered_until)
