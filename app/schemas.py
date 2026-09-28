@@ -167,7 +167,8 @@ class PredictionResult(BaseModel):
     prob_buy: float
     prob_hold: float
     prob_sell: float
-    model_version: str
+    # AI 서빙이 버전을 보내지 않아도 수신되도록 기본값을 둔다 (필수였을 때는 /ai/realtime 이 422 로 거절됨)
+    model_version: str = "unknown"
     interpretability: Optional[dict] = None
 
 
