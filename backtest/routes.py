@@ -87,5 +87,6 @@ async def list_strategies():
             {"name": "balanced", "description": "중위험 적당 수익15분봉 MACCD 추세 + 5분봉 RSI 진입"},
             {"name": "conservative", "description": "안정형 15분봉 추세 + 5분봉 RSI 진입"},
             {"name": "ultra_safe", "description": "매우 안정형 1시간봉 추세 + 15분봉 확인 + 5분봉 진입"},
+            {"name": "ai_signal", "description": "AI 서버 BUY/HOLD/SELL 신호 재생 (일봉, signals 미지정 시 저장된 예측 이력 사용)"},
         ]
     }

@@ -10,6 +10,7 @@ from backtest.engine.execution import ExecutionModel, CostModelCfg
 from backtest.engine.risk import RiskManager, RiskLimits
 from backtest.strategies.ma_cross import MACrossStrategy
 from backtest.strategies.rsi_reversal import RSIReversalStrategy
+from backtest.strategies.ai_signal import AISignalStrategy
 
 
 # 인메모리 작업 상태 (나중에 Redis로 교체 가능)
@@ -44,7 +45,7 @@ class BacktestService:
 
         # 3. 전략 로딩
         strategy = self._load_strategy(
-            request.strategy, request.symbol, request.strategy_params
+            request.strategy, request.symbol, self._resolve_strategy_params(request)
         )
 
         # 4. 백테스터 생성 & 실행
@@ -122,6 +123,29 @@ class BacktestService:
         results, total = await get_from_clickhouse(symbol, strategy, limit, offset)
         return BacktestListResponse(results=results, total=total)
 
+    def _resolve_strategy_params(self, request: BacktestRequest, session_factory=None) -> Optional[Dict]:
+        """ai_signal 전략은 요청에 signals 가 없으면 저장된 AI 예측 이력(ai_prediction_history)에서 불러온다."""
+        params = request.strategy_params
+        if request.strategy != "ai_signal" or (params or {}).get("signals"):
+            return params
+        from app.ai_history import load_signals
+
+        own = session_factory is None   # 주입된 세션(테스트)은 호출자가 소유하므로 닫지 않는다
+        if own:
+            from app.db import SessionLocal as session_factory
+        db = session_factory()
+        try:
+            signals = load_signals(db, request.symbol, request.start_date, request.end_date)
+        finally:
+            if own:
+                db.close()
+        if not signals:
+            raise ValueError(
+                f"AI 예측 이력이 없습니다: {request.symbol} {request.start_date}~{request.end_date} "
+                "(strategy_params.signals 로 직접 넘기거나, AI 서버 push 후 다시 시도)"
+            )
+        return {**(params or {}), "signals": signals}
+
     def _load_strategy(
         self, strategy_name: str, symbol: str, params: Optional[Dict] = None
     ):
@@ -130,6 +154,7 @@ class BacktestService:
         strategies = {
             "ma_cross": MACrossStrategy,
             "rsi_reversal": RSIReversalStrategy,
+            "ai_signal": AISignalStrategy,
         }
 
         strategy_cls = strategies.get(strategy_name)

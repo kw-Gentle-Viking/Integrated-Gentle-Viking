@@ -53,3 +53,32 @@ def test_record_predictions_opens_its_own_session_and_saves_all(db):
     )
     assert saved == 2
     assert load_signals(db, "000660", "2026-09-28", "2026-09-28") == {"2026-09-28": "SELL"}
+
+
+def test_backtest_service_resolves_ai_signals_from_history_when_not_given(db):
+    from app.ai_history import record_prediction
+    from backtest.schemas import BacktestRequest
+    from backtest.service import BacktestService
+    record_prediction(db, _pred("005930", "2026-09-28T15:20:00", "BUY"))
+    req = BacktestRequest(symbol="005930", strategy="ai_signal", start_date="2026-09-01", end_date="2026-09-30")
+    params = BacktestService()._resolve_strategy_params(req, session_factory=lambda: db)
+    assert params["signals"] == {"2026-09-28": "BUY"}
+
+
+def test_backtest_service_prefers_explicit_signals_and_errors_when_no_history(db):
+    from backtest.schemas import BacktestRequest
+    from backtest.service import BacktestService
+    explicit = BacktestRequest(symbol="005930", strategy="ai_signal", start_date="2026-09-01", end_date="2026-09-30",
+                               strategy_params={"signals": {"2026-09-02": "SELL"}})
+    assert BacktestService()._resolve_strategy_params(explicit, session_factory=lambda: db)["signals"] == {"2026-09-02": "SELL"}
+    empty = BacktestRequest(symbol="005930", strategy="ai_signal", start_date="2026-09-01", end_date="2026-09-30")
+    with pytest.raises(ValueError, match="AI 예측 이력"):
+        BacktestService()._resolve_strategy_params(empty, session_factory=lambda: db)
+
+
+def test_non_ai_strategies_keep_their_params_untouched(db):
+    from backtest.schemas import BacktestRequest
+    from backtest.service import BacktestService
+    req = BacktestRequest(symbol="005930", strategy="rsi_reversal", start_date="2026-09-01", end_date="2026-09-30",
+                          strategy_params={"period": 10})
+    assert BacktestService()._resolve_strategy_params(req, session_factory=lambda: db) == {"period": 10}
