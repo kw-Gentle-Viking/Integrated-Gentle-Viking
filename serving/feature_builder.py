@@ -217,6 +217,14 @@ def validate_history_rows(
     return kept
 
 
+def _num(v) -> float:
+    """None/NaN -> 0.0, matching training.stage1_data.build_ticker_dfs' fillna(0.0)."""
+    if v is None:
+        return 0.0
+    v = float(v)
+    return 0.0 if math.isnan(v) else v
+
+
 def _sma_inclusive(values: list[float], window: int) -> float:
     """Trailing SMA over the last `window` values (fewer if unavailable) -- matches
     build_features.py's `rolling(window=N, min_periods=1).mean()` semantics, where the window
@@ -305,7 +313,7 @@ def build_encoder_df(
         sma = _sma_inclusive(all_closes, n)
         live_values[col] = (today_close - sma) / sma if sma else 0.0
     live_values["rsi_14"] = _rsi(all_closes, 14)
-    hist_log_rets = [float(r.get("log_ret") or 0.0) for r in hist_sorted]
+    hist_log_rets = [_num(r.get("log_ret")) for r in hist_sorted]
     live_values["volatility_20d"] = _rolling_std(hist_log_rets + [live_values["log_ret"]], 20)
     live_values["day_of_week"] = float(now.date().weekday())
 
@@ -317,7 +325,7 @@ def build_encoder_df(
             elif col in ZERO_DEFAULT_COLS:
                 row[col] = 0.0
             elif col in FFILL_COLS:
-                row[col] = float(last_row.get(col) or 0.0)
+                row[col] = _num(last_row.get(col))
             else:
                 # Not classified into any of the three policies -- e.g. a future champion
                 # feature-set change adds a column nobody has reviewed yet for whether ffill
@@ -345,9 +353,9 @@ def build_encoder_df(
                 # all-zero (the pre-2026-09-28 behaviour) produced a pattern the model never saw on
                 # any 2023+ row; carrying the previous row's flags forward matches training except on
                 # the day a new event lands (no forward calendar to know that -- see serving_parity.md).
-                row[col] = float(last_row.get(col) or 0.0)
+                row[col] = _num(last_row.get(col))
             else:
-                row[col] = float(last_row.get(col) or 0.0)
+                row[col] = _num(last_row.get(col))
         for col in static_cols:
             row[col] = last_row.get(col)
         return row
@@ -355,9 +363,9 @@ def build_encoder_df(
     def _make_history_row(r: dict) -> dict:
         row = {}
         for col in historical_cols:
-            row[col] = float(r.get(col) or 0.0)
+            row[col] = _num(r.get(col))
         for col in future_cols:
-            row[col] = HISTORICAL_TIME_PROGRESS if col == "time_progress" else float(r.get(col) or 0.0)
+            row[col] = HISTORICAL_TIME_PROGRESS if col == "time_progress" else _num(r.get(col))
         for col in static_cols:
             row[col] = r.get(col)
         return row

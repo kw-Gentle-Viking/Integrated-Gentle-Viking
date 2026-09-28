@@ -387,3 +387,16 @@ def test_max_gap_days_default_5_overridable_by_env_and_argument(monkeypatch):
     df = build_encoder_df("005930", history, [], datetime(2026, 9, 20, 10, 0),
                           HISTORICAL_COLS, FUTURE_COLS, STATIC_COLS, max_gap_days=20)
     assert len(df) == 60
+
+
+def test_nan_and_none_feature_values_become_zero_like_training_fillna():
+    """training.stage1_data.build_ticker_dfs fillna(0.0)s every numeric column; serving must not
+    let a NaN through (`float(nan or 0.0)` is nan) into the model."""
+    history = _make_history_rows(59)
+    history[10]["sector_ret_1d"] = float("nan")
+    history[-1]["kospi_ret"] = float("nan")   # also the ffill source for today's row
+    history[20]["gold_ret"] = None
+    df = build_encoder_df("005930", history, _TODAY_ROWS, _NOW, HISTORICAL_COLS, FUTURE_COLS, STATIC_COLS)
+    assert not df[HISTORICAL_COLS + FUTURE_COLS].isna().any().any()
+    assert df["sector_ret_1d"].iloc[10] == 0.0
+    assert df["kospi_ret"].iloc[-1] == 0.0
