@@ -56,15 +56,14 @@ frame):
     including the target row, so any other value would be out-of-distribution input). (Before
     2026-09-28 today's row used `compute_time_progress(now)` in [0, 1]; that was a train/serve
     mismatch and was removed. The helper is kept for informational use only.)
-  - is_bok / is_fomc / is_witching_kr / is_witching_us: these ARE real feature_pool columns for
-    the 59 historical days (joined from market_events at build_features.py time). For "today",
-    the honest answer would be a real calendar lookup -- these are nominally "known in advance"
-    events (BOK/FOMC schedules, witching days). However, a live check against this stock_db_v2
-    confirmed market_events has no rows beyond 2025-12-19 -- the backfill was a historical
-    snapshot, not a forward-populated calendar -- so there is no live source to look these up
-    from for "today" in this task's scope, and ffilling from a >6-month-old row would be actively
-    misleading (the same problem as the event flags above). These therefore also default to 0
-    for today, not ffill. Static cols (sector_id, market_id) are effectively constant per ticker
+  - is_bok / is_fomc / is_witching_kr / is_witching_us: real feature_pool columns for the 59
+    historical days (joined from market_events at build_features.py time). NOTE they are
+    forward-filled STATE flags: build_features.py ffills them, so every 2023+ row has exactly one
+    of the four = 1 (the latest event type), rather than "event happens on this day". "Today"
+    therefore carries the previous row's flags forward (FFILL), which matches training except on
+    the day a new event lands: market_events has no rows beyond 2025-12-19 (no forward calendar),
+    so that flip cannot be known in advance. (Until 2026-09-28 these defaulted to 0 for today,
+    an all-zero pattern never seen on any 2023+ row -- fixed, see docs/serving_parity.md.) Static cols (sector_id, market_id) are effectively constant per ticker
     and are simply carried forward from the most recent real row (ffill).
 
 Design note on trailing-average inputs (disparity_Nd / rsi_14 / volatility_20d): these need raw
@@ -79,6 +78,7 @@ model input columns and is dropped from the columns actually fed to the model.
 """
 
 import math
+import os
 from datetime import date, datetime, time as dtime
 
 import pandas as pd
@@ -139,6 +139,14 @@ def compute_time_progress(now: datetime) -> float:
 # Default max calendar-day distance between the last history row and "today" when no market
 # trading-date list is available (weekend + one holiday fits; a week+ gap means stale data).
 MAX_HISTORY_GAP_DAYS = 5
+# Long holiday blocks (Chuseok / Seollal: 6-9 calendar days between trading days) trip the
+# calendar-day rule; stock_db_v2.calendar cannot tell (it omits Korean holidays), so the limit is
+# overridable: HISTORY_MAX_GAP_DAYS env var, or the max_gap_days argument.
+
+
+def _default_max_gap_days() -> int:
+    v = os.environ.get("HISTORY_MAX_GAP_DAYS")
+    return int(v) if v else MAX_HISTORY_GAP_DAYS
 
 
 class HistoryIntegrityError(ValueError):
@@ -154,7 +162,7 @@ def validate_history_rows(
     today: date | None = None,
     market_dates: set[date] | None = None,
     market_covered_until: date | None = None,
-    max_gap_days: int = MAX_HISTORY_GAP_DAYS,
+    max_gap_days: int | None = None,
 ) -> list[dict]:
     """Validate a ticker's feature_pool history and return the rows to actually use.
 
@@ -170,7 +178,10 @@ def validate_history_rows(
         applies. (stock_db_v2.calendar.is_market_open is NOT used: it is weekday-based and misses
         Korean holidays -- 119 days disagree with feature_pool's actual trading dates.)
     Raises HistoryIntegrityError explicitly instead of letting a stale/holey window through.
+    `max_gap_days` defaults to env HISTORY_MAX_GAP_DAYS or 5.
     """
+    if max_gap_days is None:
+        max_gap_days = _default_max_gap_days()
     if not rows:
         raise HistoryIntegrityError("no feature_pool history rows")
     dates = [_as_date(r["trade_date"]) for r in rows]
@@ -248,6 +259,7 @@ def build_encoder_df(
     static_cols: list[str],
     market_dates: set[date] | None = None,
     market_covered_until: date | None = None,
+    max_gap_days: int | None = None,
 ) -> pd.DataFrame:
     """Pure computation, no DB access -- unit-testable with synthetic rows (see
     serving/test_feature_builder.py), matching the pattern already established by
@@ -271,7 +283,7 @@ def build_encoder_df(
     try:
         hist_sorted = validate_history_rows(
             history_rows, today=now.date(), market_dates=market_dates,
-            market_covered_until=market_covered_until)
+            market_covered_until=market_covered_until, max_gap_days=max_gap_days)
     except HistoryIntegrityError as e:
         raise HistoryIntegrityError(f"ticker={ticker!r}: {e}") from e
     closes = [float(r["close_price"]) for r in hist_sorted]
@@ -327,7 +339,13 @@ def build_encoder_df(
                 # only as an informational helper -- it must not reach the model input.
                 row[col] = HISTORICAL_TIME_PROGRESS
             elif col in FUTURE_DB_COLS:
-                row[col] = 0.0  # see docstring: no forward-populated calendar in this task's scope
+                # feature_pool's event flags are forward-filled STATE flags (features/build_features.py
+                # ffills is_bok/is_fomc/is_witching_* over the trade calendar, so every 2023+ row is a
+                # one-hot of the latest event type), NOT "event happens today". Defaulting today to
+                # all-zero (the pre-2026-09-28 behaviour) produced a pattern the model never saw on
+                # any 2023+ row; carrying the previous row's flags forward matches training except on
+                # the day a new event lands (no forward calendar to know that -- see serving_parity.md).
+                row[col] = float(last_row.get(col) or 0.0)
             else:
                 row[col] = float(last_row.get(col) or 0.0)
         for col in static_cols:

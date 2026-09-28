@@ -357,3 +357,33 @@ def test_build_encoder_df_for_ticker_falls_back_when_market_dates_unavailable(mo
     df = fb.build_encoder_df_for_ticker("005930", "v2", "prod", HISTORICAL_COLS, FUTURE_COLS, STATIC_COLS,
                                         now=_NOW)
     assert len(df) == 60
+
+
+# feature_pool's is_bok/is_fomc/is_witching_kr/is_witching_us are forward-filled STATE flags (one-hot of
+# "latest market event type", see docs/serving_parity.md), not "event happens today" flags -- so
+# today's row must carry the previous row's flags forward, not default to all-zero (a pattern the
+# model never saw on any 2023+ row).
+def test_future_db_flags_for_today_are_carried_forward_not_zeroed():
+    history = _make_history_rows(59)
+    for r in history:
+        r["is_bok"], r["is_fomc"], r["is_witching_kr"], r["is_witching_us"] = 0, 0, 0, 0
+    history[-1]["is_fomc"] = 1
+    df = build_encoder_df("005930", history, _TODAY_ROWS, _NOW, HISTORICAL_COLS, FUTURE_COLS, STATIC_COLS)
+    today = df.iloc[-1]
+    assert (today["is_bok"], today["is_fomc"], today["is_witching_kr"], today["is_witching_us"]) == (0, 1, 0, 0)
+
+
+def test_max_gap_days_default_5_overridable_by_env_and_argument(monkeypatch):
+    history = _make_history_rows(59)  # last 2026-09-08
+    monkeypatch.delenv("HISTORY_MAX_GAP_DAYS", raising=False)
+    with pytest.raises(HistoryIntegrityError):
+        validate_history_rows(history, today=date(2026, 9, 17))  # gap 9, e.g. after a Chuseok block
+    assert len(validate_history_rows(history, today=date(2026, 9, 17), max_gap_days=10)) == 59
+    monkeypatch.setenv("HISTORY_MAX_GAP_DAYS", "10")
+    assert len(validate_history_rows(history, today=date(2026, 9, 17))) == 59
+    df = build_encoder_df("005930", history, [], datetime(2026, 9, 17, 10, 0),
+                          HISTORICAL_COLS, FUTURE_COLS, STATIC_COLS)
+    assert len(df) == 60
+    df = build_encoder_df("005930", history, [], datetime(2026, 9, 20, 10, 0),
+                          HISTORICAL_COLS, FUTURE_COLS, STATIC_COLS, max_gap_days=20)
+    assert len(df) == 60

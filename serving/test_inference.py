@@ -72,3 +72,22 @@ def test_run_inference_builds_2d_static_tensor_not_3d():
     )
     assert captured["static"].dim() == 2
     assert tuple(captured["static"].shape) == (1, 2)
+
+
+def test_assemble_model_inputs_shapes_and_dtypes():
+    """run_inference's tensor assembly is exposed so the train/serve parity test exercises the
+    exact code path serving uses."""
+    from serving.inference import assemble_model_inputs
+
+    encoder_df = pd.DataFrame({
+        "log_ret": np.arange(60, dtype=float), "disparity_20": np.ones(60),
+        "time_progress": [1.0] * 60, "is_bok": 0, "sector_id": 3, "market_id": 1,
+    })
+    b = assemble_model_inputs(encoder_df, ["log_ret", "disparity_20"], ["time_progress", "is_bok"],
+                              ["sector_id", "market_id"])
+    assert tuple(b["historical_ts_numeric"].shape) == (1, 60, 2)
+    assert tuple(b["future_ts_numeric"].shape) == (1, 1, 2)
+    assert tuple(b["static_feats_categorical"].shape) == (1, 2)
+    assert b["historical_ts_numeric"].dtype == torch.float32
+    assert b["static_feats_categorical"].dtype == torch.int64
+    assert b["historical_ts_numeric"][0, -1, 0].item() == 59.0

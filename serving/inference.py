@@ -14,6 +14,25 @@ def softmax_probs(logits: torch.Tensor) -> dict:
     }
 
 
+def assemble_model_inputs(encoder_df: pd.DataFrame, historical_cols: list[str],
+                          future_cols: list[str], static_cols: list[str]) -> dict:
+    """encoder_df (60 rows, last = today) -> the model's input batch (batch size 1). Mirrors
+    training.dataset.TickerDayDataset(align="today").__getitem__ with a leading batch dim; kept as
+    its own function so serving/test_train_serving_parity.py checks the real assembly code."""
+    hist = torch.tensor(encoder_df[historical_cols].values.astype("float32")).unsqueeze(0)
+    fut = torch.tensor(encoder_df[future_cols].iloc[[-1]].values.astype("float32")).unsqueeze(0)
+    # NOTE: static must stay 2D [batch, num_static], NOT [batch, 1, num_static] -- tft-torch's
+    # static input channel is not time-distributed (see training/train.py's _to_device_batch,
+    # which squeezes the same singleton dim off the training batch before calling the model).
+    # `.iloc[[-1]].values` already has shape (1, num_static) -- that IS the batch-of-1 shape, so
+    # no extra unsqueeze here (unlike hist/fut, which start 2D per-sample and need a batch dim
+    # added). Caught live during this task's real-model smoke test (a bug the Steps 1-4 FakeModel
+    # unit test couldn't catch, since it doesn't touch tft-torch's static embedding layer).
+    static = torch.tensor(encoder_df[static_cols].iloc[[-1]].values.astype("int64"))
+    return {"historical_ts_numeric": hist, "future_ts_numeric": fut,
+            "static_feats_categorical": static}
+
+
 def run_inference(ticker: str, encoder_df: pd.DataFrame, model,
                    historical_cols: list[str], future_cols: list[str],
                    static_cols: list[str]) -> dict:
@@ -26,19 +45,9 @@ def run_inference(ticker: str, encoder_df: pd.DataFrame, model,
     1 assembled "today" row) -- that is entirely serving.feature_builder's job
     (build_encoder_df / build_encoder_df_for_ticker), not this function's.
     """
-    hist = torch.tensor(encoder_df[historical_cols].values.astype("float32")).unsqueeze(0)
-    fut = torch.tensor(encoder_df[future_cols].iloc[[-1]].values.astype("float32")).unsqueeze(0)
-    # NOTE: static must stay 2D [batch, num_static], NOT [batch, 1, num_static] -- tft-torch's
-    # static input channel is not time-distributed (see training/train.py's _to_device_batch,
-    # which squeezes the same singleton dim off the training batch before calling the model).
-    # `.iloc[[-1]].values` already has shape (1, num_static) -- that IS the batch-of-1 shape, so
-    # no extra unsqueeze here (unlike hist/fut, which start 2D per-sample and need a batch dim
-    # added). Caught live during this task's real-model smoke test (a bug the Steps 1-4 FakeModel
-    # unit test couldn't catch, since it doesn't touch tft-torch's static embedding layer).
-    static = torch.tensor(encoder_df[static_cols].iloc[[-1]].values.astype("int64"))
+    batch = assemble_model_inputs(encoder_df, historical_cols, future_cols, static_cols)
 
     model.eval()
     with torch.no_grad():
-        out = model({"historical_ts_numeric": hist, "future_ts_numeric": fut,
-                      "static_feats_categorical": static})
+        out = model(batch)
     return softmax_probs(out["class_logits"])
