@@ -16,6 +16,22 @@ from backtest.engine.risk import (
 )
 
 
+# 원화 주가 sanity 범위. 한국 주식은 수백 원짜리부터 수백만 원(삼성바이오로직스 등)까지 정상 시세이므로
+# 상·하한을 "단위 오류를 잡는 정도"로만 둔다. (이전에는 종가 10만원 이상이면 루프를 조용히 break,
+# 100만원 초과는 예외, 포지션 100주 초과도 예외였다.)
+MAX_KRW_PRICE = 1e9
+# 포지션 평가액이 시작 자본의 이 배수를 넘으면 엔진 버그로 본다 (주식 수 상한 대신 금액 기준).
+MAX_POSITION_NOTIONAL_MULT = 100.0
+
+
+def _valid_price(px) -> bool:
+    try:
+        px = float(px)
+    except (TypeError, ValueError):
+        return False
+    return bool(np.isfinite(px) and 0 < px < MAX_KRW_PRICE)
+
+
 class Backtester:
     def __init__(
         self,
@@ -36,12 +52,13 @@ class Backtester:
         self.portfolio = Portfolio()
         self.fills: List[Fill] = []
         self.trades: List[Dict[str, Any]] = []
+        self._start_equity = float(self.portfolio.equity)
 
     def _mid_and_spreadbps(self, row: pd.Series) -> Tuple[float, float]:
         close_val = row["close"]
         close = float(close_val)
 
-        if close > 1e6 or close < 0:
+        if not _valid_price(close):
             raise ValueError(f"Invalid close value detected: {close}")
 
         spread_bps = float(row.get("spread_bps", 2.0))
@@ -53,8 +70,9 @@ class Backtester:
 
         for pos in self.portfolio.positions.values():
             eq += pos.qty * px
-            if abs(pos.qty) > 1e2:
-                raise ValueError(f"Position qty too big: {pos.qty}")
+            # 주식 수가 아니라 금액으로 sanity check (저가주는 정상적으로 수백~수천 주가 된다).
+            if abs(pos.qty) * px > MAX_POSITION_NOTIONAL_MULT * max(self._start_equity, 1):
+                raise ValueError(f"Position notional too big: qty={pos.qty} px={px}")
 
         if eq < 0:
             eq = 0.0
@@ -95,14 +113,17 @@ class Backtester:
         )
 
     def run(self) -> pd.DataFrame:
+        self._start_equity = float(self.portfolio.equity)
         eq_curve = []
         eq_curve.append({"ts": self.base_df.index[0], "equity": self.portfolio.equity})
 
         for i, (ts, row) in enumerate(self.base_df.iterrows(), start=1):
             # self._refresh_sr_if_needed(i, ts)
 
-            if not (1 < row["close"] < 100000):
-                break
+            # 잘못된 시세는 조용히 루프를 끊지 않고 명시적으로 실패시킨다 (끊으면 곡선이 1점이 되어
+            # 성과가 전부 0으로 보이는데, 실제로는 데이터/가격대 문제였다).
+            if not _valid_price(row["close"]):
+                raise ValueError(f"Invalid close at {ts}: {row['close']}")
 
             orders: List[Order] = self.strategy.generate_orders(row, self.portfolio)
             mid, spread_bps = self._mid_and_spreadbps(row)
@@ -110,7 +131,7 @@ class Backtester:
             if (
                 isinstance(mid, (pd.Timestamp, np.datetime64))
                 or (not np.isfinite(mid))
-                or (not (1e-6 < mid < 1e6))
+                or (not _valid_price(mid))
             ):
                 raise ValueError(f"mid invalid at {ts}: {mid}")
 

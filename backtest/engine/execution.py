@@ -6,6 +6,8 @@ import numpy as np
 
 from backtest.engine.risk import Side, OrderType, Fill
 
+MAX_KRW_PRICE = 1e9  # backtester.MAX_KRW_PRICE 와 같은 값 (순환 import 방지용 복제)
+
 
 @dc.dataclass
 class CostModelCfg:
@@ -49,7 +51,7 @@ class ExecutionModel:
         if (
             isinstance(mid, (pd.Timestamp, np.datetime64))
             or (not np.isfinite(mid))
-            or (not (1e-6 < float(mid) < 1e6))
+            or (not (0 < float(mid) < MAX_KRW_PRICE))
         ):
             raise ValueError(f"simulate(): mid invalid @ {ts} -> {mid}")
 
@@ -67,7 +69,7 @@ class ExecutionModel:
 
             fills.append(Fill(ts, self._new_id(), symbol, side, qty, px, fee, False))
 
-            if not np.isfinite(px) or not (1e-6 < float(px) < 1e6):
+            if not np.isfinite(px) or not (0 < float(px) < MAX_KRW_PRICE):
                 raise ValueError(f"simulate(): px invalid @ {ts} -> {px}")
 
             return fills
@@ -88,7 +90,7 @@ class ExecutionModel:
 
             fills.append(Fill(ts, self._new_id(), symbol, side, qty, px, fee, True))
 
-            if not np.isfinite(px) or not (1e-6 < float(px) < 1e6):
+            if not np.isfinite(px) or not (0 < float(px) < MAX_KRW_PRICE):
                 raise ValueError(f"simulate(): px invalid @ {ts} -> {px}")
 
         return fills
