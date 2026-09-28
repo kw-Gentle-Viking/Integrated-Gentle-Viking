@@ -40,7 +40,7 @@ from pydantic import BaseModel
 
 from serving.feature_builder import build_encoder_df_for_ticker
 from serving.inference import run_inference
-from serving.model import get_feature_columns, get_model
+from serving.model import get_feature_columns, get_model, get_model_version
 
 logging.basicConfig(
     level=logging.INFO,
@@ -109,6 +109,7 @@ def run_once_inference(user_id: str, tickers: list[str], callback_url: str, job_
                 "prob_buy": round(pred["prob_buy"], 4),
                 "prob_hold": round(pred["prob_hold"], 4),
                 "prob_sell": round(pred["prob_sell"], 4),
+                "model_version": get_model_version(),
             })
         except Exception as e:
             logger.error("[%s] %s 추론 실패: %s", job_id, ticker, e)

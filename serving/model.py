@@ -47,6 +47,11 @@ _model = None
 _lock = threading.Lock()
 
 
+def get_model_version() -> str:
+    """백엔드로 push 하는 예측에 붙이는 모델 버전. TFT_MODEL_VERSION 이 있으면 그것, 없으면 모델 파일명(확장자 제외)."""
+    return os.environ.get("TFT_MODEL_VERSION") or os.path.splitext(os.path.basename(MODEL_PATH))[0]
+
+
 def load_champion_config(path: str = CHAMPION_CONFIG_PATH) -> dict:
     global _champion
     if _champion is None:

@@ -35,7 +35,7 @@ import requests
 
 from serving.feature_builder import build_encoder_df_for_ticker, fetch_today_intraday_rows
 from serving.inference import run_inference
-from serving.model import get_feature_columns, get_model
+from serving.model import get_feature_columns, get_model, get_model_version
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -78,7 +78,8 @@ def run_for_tickers(tickers: list[str], v2_dsn: str, prod_dsn: str, now: datetim
                 cols["historical"], cols["future"], cols["static"], now=now,
             )
             pred = run_inference(ticker, encoder_df, model, cols["historical"], cols["future"], cols["static"])
-            results.append({"ticker": ticker, "trade_datetime": now.isoformat(), **pred})
+            results.append({"ticker": ticker, "trade_datetime": now.isoformat(),
+                            "model_version": get_model_version(), **pred})
         except Exception as e:
             logger.error("%s 추론 실패: %s", ticker, e)
     return results
