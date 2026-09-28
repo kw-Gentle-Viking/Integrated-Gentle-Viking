@@ -7,6 +7,7 @@ from datetime import datetime
 from app.schemas import CommandRequest
 
 from app.dependencies import get_current_user
+from app.security_guards import service_key_auth
 from app.models import User
 
 router = APIRouter()
@@ -52,7 +53,7 @@ def request_prediction(
     }
 
 
-@router.post("/commands/push")
+@router.post("/commands/push", dependencies=[Depends(service_key_auth)])
 def push_command(payload: CommandRequest):
     """백엔드 내부에서 커맨드 적재 (trade/start 호출 시)"""
     cmd = {
@@ -68,7 +69,7 @@ def push_command(payload: CommandRequest):
     return {"status": "queued", "command": payload.command}
 
 
-@router.get("/commands/pending")
+@router.get("/commands/pending", dependencies=[Depends(service_key_auth)])
 def get_pending_commands():
     """AI 서버가 polling으로 가져감"""
     pending = [c for c in command_queue if c["status"] == "pending"]
@@ -80,7 +81,7 @@ def get_pending_commands():
     return {"commands": pending}
 
 
-@router.get("/commands/history")
+@router.get("/commands/history", dependencies=[Depends(service_key_auth)])
 def get_command_history():
     """커맨드 이력 조회 (디버깅용)"""
     return {"commands": command_queue[-50:]}

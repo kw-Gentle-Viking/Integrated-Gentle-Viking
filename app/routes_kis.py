@@ -637,7 +637,7 @@ def _validate_mock_account_config() -> None:
 
 
 @router.get("/account/assets")
-async def get_account_assets():
+async def get_account_assets(current_user: User = Depends(get_current_user)):
     """KIS 모의투자 계좌 자산을 프론트 자산 화면 형식으로 반환."""
     _validate_mock_account_config()
     token = await get_access_token()

@@ -1,11 +1,12 @@
 # app/routes_ai_webhook.py
 import os
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 
 from app.ai_history import record_predictions
 from app.db import SessionLocal
-from app.models import LiveCandle
+from app.dependencies import get_current_user
+from app.models import LiveCandle, User
 from app.schemas import AgreementAnalysisRequest, OnceCallbackPayload, PredictionResult, RealtimePayload, WarmupPayload
 from app.services_report import generate_agreement_analysis, generate_report, save_report
 from app.shared_state import SIGNAL_MAP, ai_signal_event, realtime_predictions, warmup_events, warmup_received, warmup_requirements
@@ -204,7 +205,7 @@ def get_once_result(job_id: str):
 
 
 @router.post("/agreement")
-def analyze_model_agreement(payload: AgreementAnalysisRequest):
+def analyze_model_agreement(payload: AgreementAnalysisRequest, current_user: User = Depends(get_current_user)):
     """추천 리포트와 TFT 예측 결과의 합치성/불일치 이유를 해석."""
     return generate_agreement_analysis(payload.model_dump())
 

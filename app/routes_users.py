@@ -8,6 +8,7 @@ from app.models import User
 from app.schemas import UserCreate, UserRead, UserProfileUpdate
 from app.crud_users import create_user, get_user, list_users, update_user_profile
 from app.services_investment import calculate_risk_score
+from app.security_guards import require_debug_endpoints
 
 router = APIRouter()
 
@@ -65,15 +66,26 @@ def update_profile(
     return update_user_profile(db, current_user, payload, risk_score)
 
 
-# 개발/디버깅용
+# 본인 정보만 조회 가능 (예전에는 로그인 없이 누구나 임의 회원의 이메일/전화/생년월일을 볼 수 있었다)
 @router.get("/{user_id}", response_model=UserRead)
-def read_user(user_id: int, db: Session = Depends(get_db)):
+def read_user(
+    user_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Forbidden")
     user = get_user(db, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     return user
 
 
-@router.get("", response_model=list[UserRead])
-def read_users(limit: int = 100, db: Session = Depends(get_db)):
+# 개발/디버깅용: ENABLE_DEBUG_ENDPOINTS=true 이고 로그인한 경우에만 (기본은 404)
+@router.get("", response_model=list[UserRead], dependencies=[Depends(require_debug_endpoints)])
+def read_users(
+    limit: int = 100,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     return list_users(db, limit=limit)

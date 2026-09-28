@@ -27,6 +27,11 @@ from app.db import SessionLocal
 from contextlib import asynccontextmanager
 
 
+from app.security_guards import validate_production_secrets
+
+# APP_ENV=production 이면 개발용 기본 시크릿/데모 모드로는 기동하지 않는다 (GCP 배포 안전장치)
+validate_production_secrets()
+
 # Base.metadata.drop_all(bind=engine)
 
 Base.metadata.create_all(bind=engine)
