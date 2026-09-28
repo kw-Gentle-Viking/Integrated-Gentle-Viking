@@ -373,8 +373,21 @@ export function getAccessToken(): string | null {
   return window.localStorage.getItem(ACCESS_TOKEN_KEY);
 }
 
-// access token 만료 시 refresh token으로 새 토큰 발급
-export async function refreshTokens(): Promise<boolean> {
+// access token 만료 시 refresh token으로 새 토큰 발급.
+// 병렬 요청이 동시에 401 을 받으면 각자 refresh 를 호출하게 되는데, 백엔드는 refresh token 재사용을 탈취로 보고
+// 토큰 family 전체를 폐기한다. 진행 중인 갱신은 하나로 합쳐(single-flight) 모든 호출이 같은 결과를 받게 한다.
+let refreshInFlight: Promise<boolean> | null = null;
+
+export function refreshTokens(): Promise<boolean> {
+  if (!refreshInFlight) {
+    refreshInFlight = doRefreshTokens().finally(() => {
+      refreshInFlight = null;
+    });
+  }
+  return refreshInFlight;
+}
+
+async function doRefreshTokens(): Promise<boolean> {
   const refreshToken = canUseStorage()
     ? window.localStorage.getItem(REFRESH_TOKEN_KEY)
     : null;

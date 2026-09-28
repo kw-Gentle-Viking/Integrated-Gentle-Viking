@@ -119,6 +119,11 @@ async function fetchPrediction(code: string) {
   return normalizePrediction((await res.json()) as BackendPrediction);
 }
 
+async function isOnceJobDone(jobId: string) {
+  const res = await apiFetch(`${API_BASE}/ai/once/${encodeURIComponent(jobId)}`);
+  return res.ok; // 콜백 전에는 404
+}
+
 export async function startPredictionJob(code: string, stockName: string, options: { force?: boolean } = {}) {
   if (running.has(code)) return running.get(code);
   const existing = getJob(code);
@@ -161,6 +166,9 @@ export async function startPredictionJob(code: string, stockName: string, option
 
       for (let attempt = 0; attempt < 24; attempt += 1) {
         await delay(2500);
+        // 새 ONCE 결과가 도착하기 전에 /ai/predictions 를 읽으면 이전 예측이 그대로 나와 새 결과로 오인된다.
+        // job_id 가 있으면 콜백 도착(GET /ai/once/{job_id} 200)을 확인한 뒤에만 결과를 채택한다.
+        if (payload.job_id && !(await isOnceJobDone(payload.job_id))) continue;
         const result = await fetchPrediction(code);
         if (result) {
           setJob(code, {

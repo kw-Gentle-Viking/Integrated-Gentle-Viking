@@ -341,7 +341,8 @@ export default function PortfolioPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          total_capital: totalValue > 0 ? totalValue : undefined,
+          // total_capital 은 보내지 않는다: 바구니 종목의 '1주 가격 합'은 투자 원금이 아니고, 새로고침 후에는
+          // 가격이 비어 값이 사라져 서버가 계좌 전체 예수금을 쓰게 되어 결과가 달라졌다. 서버가 항상 KIS 예수금을 조회한다.
           basket: cartStocks.map((stock) => ({
             ticker: stock.code,
             ticker_name: stock.name,

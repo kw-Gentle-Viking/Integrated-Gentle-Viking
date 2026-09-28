@@ -17,6 +17,7 @@ type TradeLog = {
   ai_confidence: number;
   strategy_id: string;
   created_at: string;
+  status?: "FILLED" | "FAILED" | string;
 };
 
 const ACTION_STYLE: Record<AITradeAction, string> = {
@@ -80,9 +81,11 @@ export default function AITradeHistory() {
     return () => { cancelled = true; };
   }, []);
 
+  // 이 화면은 체결 건만 보여준다(마이페이지 문구): 실패한 주문(FAILED)은 제외한다.
+  const filledTrades = trades.filter((trade) => trade.status !== "FAILED");
   const filtered = filter === "전체"
-    ? trades
-    : trades.filter((trade) => toAction(trade.side) === filter);
+    ? filledTrades
+    : filledTrades.filter((trade) => toAction(trade.side) === filter);
 
   return (
     <div className="space-y-5">
