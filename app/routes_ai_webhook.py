@@ -3,6 +3,7 @@ import os
 
 from fastapi import APIRouter, Header, HTTPException
 
+from app.ai_history import record_predictions
 from app.db import SessionLocal
 from app.models import LiveCandle
 from app.schemas import AgreementAnalysisRequest, OnceCallbackPayload, PredictionResult, RealtimePayload, WarmupPayload
@@ -95,14 +96,17 @@ def receive_realtime(
     """5분 자동 추론 결과 수신 (AI 서버 -> 백엔드)"""
     verify_api_key(x_api_key)
 
+    parsed_all = []
     for result in payload.results:
         parsed = parse_prediction(result)
         realtime_predictions[result.ticker] = parsed
+        parsed_all.append(parsed)
         print(
             f" {result.ticker}: {parsed['signal']} "
             f"(B:{result.prob_buy:.3f} H:{result.prob_hold:.3f} S:{result.prob_sell:.3f})"
         )
 
+    record_predictions(parsed_all)   # 이력 저장 (실패해도 웹훅 응답에는 영향 없음)
     ai_signal_event.set()
 
     return {"status": "ok", "received": len(payload.results)}

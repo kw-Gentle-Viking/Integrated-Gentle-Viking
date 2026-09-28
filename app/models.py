@@ -239,3 +239,18 @@ class LiveCandle(Base):
     close: Mapped[float] = mapped_column(Float)
     volume: Mapped[int] = mapped_column(Integer)
     trade_datetime: Mapped[datetime] = mapped_column(DateTime)
+
+class AIPredictionHistory(Base):
+    """AI 서버가 push 한 예측의 이력. (realtime_predictions 는 종목별 최신 1건만 메모리에 덮어써서 백테스트/감사에 못 썼다)"""
+    __tablename__ = "ai_prediction_history"
+    __table_args__ = (Index("ix_ai_pred_ticker_dt", "ticker", "trade_datetime"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    ticker: Mapped[str] = mapped_column(String(10))
+    trade_datetime: Mapped[datetime] = mapped_column(DateTime)   # 예측 시각 (KST naive)
+    signal: Mapped[str] = mapped_column(String(10))              # BUY | HOLD | SELL
+    prob_buy: Mapped[float] = mapped_column(Float, default=0.0)
+    prob_hold: Mapped[float] = mapped_column(Float, default=0.0)
+    prob_sell: Mapped[float] = mapped_column(Float, default=0.0)
+    model_version: Mapped[str] = mapped_column(String(50), default="unknown")
+    received_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
