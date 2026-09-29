@@ -39,28 +39,56 @@ def _frames(rets_by_date, tickers=None, glitch=None):
 
 
 # ---------------- recipe table / opts / fingerprint ----------------
+ORIGINAL_4 = ["x1_cslabel", "x2_cslabel_nostatic", "x3_vn_nostatic", "x4_cslabel_vnfeat"]
+COLLAPSE_DIAG_6 = ["x2_nostatic_nowd", "x3_vn_nostatic_nowd", "x2_nostatic_seed1", "x3_vn_nostatic_seed1",
+                   "x2_nostatic_seed2", "x3_vn_nostatic_seed2"]
+
+
 def test_recipe_table_and_order():
-    assert e4.DEFAULT_ORDER == ["x1_cslabel", "x2_cslabel_nostatic", "x3_vn_nostatic", "x4_cslabel_vnfeat"]
-    assert set(e4.RECIPES) == set(e4.DEFAULT_ORDER)
-    assert len({e4.RECIPES[n]["tag"] for n in e4.RECIPES}) == 4
+    assert e4.DEFAULT_ORDER == ORIGINAL_4 + COLLAPSE_DIAG_6                    # original 4 untouched, then the 6 reruns
+    assert e4.DEFAULT_ORDER[4:6] == ["x2_nostatic_nowd", "x3_vn_nostatic_nowd"]        # weight_decay hypothesis first
+    assert e4.DEFAULT_ORDER[6:] == ["x2_nostatic_seed1", "x3_vn_nostatic_seed1", "x2_nostatic_seed2", "x3_vn_nostatic_seed2"]
+    assert set(e4.RECIPES) == set(e4.DEFAULT_ORDER) == set(ORIGINAL_4) | set(COLLAPSE_DIAG_6)
+    assert len({e4.RECIPES[n]["tag"] for n in e4.RECIPES}) == 10               # every tag unique, old and new
     r = e4.RECIPES
     assert (r["x1_cslabel"]["label_source"], r["x1_cslabel"]["static_const"], r["x1_cslabel"]["vol_rank"]) == ("cs", False, False)
     assert (r["x2_cslabel_nostatic"]["label_source"], r["x2_cslabel_nostatic"]["static_const"]) == ("cs", True)
     assert (r["x3_vn_nostatic"]["label_source"], r["x3_vn_nostatic"]["static_const"]) == ("label_vn", True)
     assert (r["x4_cslabel_vnfeat"]["label_source"], r["x4_cslabel_vnfeat"]["static_const"], r["x4_cslabel_vnfeat"]["vol_rank"]) == ("cs", False, True)
     assert e4.PATIENCE == 4 and e4.MAX_EPOCHS == 12 and e4.SELECT_KEY == "val_timing_ic"
+    # the original 4 carry no seed/weight_decay override (module defaults apply)
+    for n in ORIGINAL_4:
+        assert "seed" not in r[n] and "weight_decay" not in r[n]
+
+
+def test_collapse_diagnosis_recipes_reuse_x2_x3_spec_with_only_seed_or_weight_decay_overridden():
+    r = e4.RECIPES
+    x2, x3 = r["x2_cslabel_nostatic"], r["x3_vn_nostatic"]
+    same_spec_keys = ("label_source", "static_const", "vol_rank")
+    for n, parent in (("x2_nostatic_nowd", x2), ("x2_nostatic_seed1", x2), ("x2_nostatic_seed2", x2),
+                      ("x3_vn_nostatic_nowd", x3), ("x3_vn_nostatic_seed1", x3), ("x3_vn_nostatic_seed2", x3)):
+        for k in same_spec_keys:
+            assert r[n][k] == parent[k], (n, k)
+    assert r["x2_nostatic_nowd"]["weight_decay"] == 0.0 and "seed" not in r["x2_nostatic_nowd"]
+    assert r["x3_vn_nostatic_nowd"]["weight_decay"] == 0.0 and "seed" not in r["x3_vn_nostatic_nowd"]
+    assert r["x2_nostatic_seed1"]["seed"] == 1 and "weight_decay" not in r["x2_nostatic_seed1"]
+    assert r["x2_nostatic_seed2"]["seed"] == 2 and "weight_decay" not in r["x2_nostatic_seed2"]
+    assert r["x3_vn_nostatic_seed1"]["seed"] == 1 and "weight_decay" not in r["x3_vn_nostatic_seed1"]
+    assert r["x3_vn_nostatic_seed2"]["seed"] == 2 and "weight_decay" not in r["x3_vn_nostatic_seed2"]
 
 
 def test_recipe_opts_common_settings_and_fingerprints_differ():
     base = {"hparams": {"lr": 3e-4, "dropout": 0.17, "state_size": 32}, "batch_size": 8, "seed": 5, "align": "today"}
     for n in e4.RECIPES:
         o = e4.recipe_opts(n, base)
-        assert o["hparams"]["weight_decay"] == 1e-3 and o["seed"] == 0 and o["patience"] == 4
-        assert o["select"] == "val_timing_ic" and o["align"] == "today"
+        assert o["patience"] == 4 and o["select"] == "val_timing_ic" and o["align"] == "today"
+    for n in ORIGINAL_4:                                                       # module defaults: wd 1e-3, seed 0
+        o = e4.recipe_opts(n, base)
+        assert o["hparams"]["weight_decay"] == 1e-3 and o["seed"] == 0
     assert "weight_decay" not in base["hparams"] and base["seed"] == 5          # base not mutated
     assert e4.recipe_opts("x1_cslabel", {**base, "state_size_override": 8})["hparams"]["state_size"] == 8
     fps = {n: e4.cheap_fingerprint(n, e4.recipe_opts(n, base)) for n in e4.RECIPES}
-    assert len({json.dumps(f, sort_keys=True) for f in fps.values()}) == 4
+    assert len({json.dumps(f, sort_keys=True) for f in fps.values()}) == 10     # all 10 fingerprints distinct
     assert fps["x3_vn_nostatic"]["label_col"] == "label_vn" and fps["x1_cslabel"]["label_col"] == "cs_quantile"
     assert fps["x4_cslabel_vnfeat"]["e4"]["vol_rank_cols"] == ["volatility_20d", "sector_volatility"]
     assert fps["x2_cslabel_nostatic"]["e4"]["static_const"] is True and fps["x1_cslabel"]["e4"]["static_const"] is False
@@ -68,6 +96,40 @@ def test_recipe_opts_common_settings_and_fingerprints_differ():
     assert fps["x1_cslabel"]["preprocessed"] is False
     full = e4.full_fingerprint("x1_cslabel", e4.recipe_opts("x1_cslabel", base), ["a"], [1, 2, 3])
     assert full["columns_hash"] and full["class_weights"] == [1.0, 2.0, 3.0]
+
+
+def test_collapse_diagnosis_recipe_opts_and_fingerprints_differ_only_by_seed_or_weight_decay():
+    base = {"hparams": {"lr": 3e-4, "dropout": 0.17, "state_size": 32}, "batch_size": 8, "align": "today"}
+    o_x2 = e4.recipe_opts("x2_cslabel_nostatic", base)
+    assert e4.recipe_opts("x2_nostatic_nowd", base)["hparams"]["weight_decay"] == 0.0
+    assert e4.recipe_opts("x2_nostatic_nowd", base)["seed"] == 0                # weight_decay override only
+    assert e4.recipe_opts("x2_nostatic_seed1", base)["seed"] == 1
+    assert e4.recipe_opts("x2_nostatic_seed1", base)["hparams"]["weight_decay"] == 1e-3   # seed override only
+    assert e4.recipe_opts("x2_nostatic_seed2", base)["seed"] == 2
+    o_x3 = e4.recipe_opts("x3_vn_nostatic", base)
+    assert e4.recipe_opts("x3_vn_nostatic_nowd", base)["hparams"]["weight_decay"] == 0.0
+    assert e4.recipe_opts("x3_vn_nostatic_seed1", base)["seed"] == 1
+    assert e4.recipe_opts("x3_vn_nostatic_seed2", base)["seed"] == 2
+    # cheap_fingerprint: "e4" section (label_source/static_const/vol_rank_cols) is IDENTICAL to the parent
+    # (same spec), but the outer "seed"/"hparams" differ, so the overall fingerprint still differs (no collision).
+    fp_x2 = e4.cheap_fingerprint("x2_cslabel_nostatic", o_x2)
+    for n in ("x2_nostatic_nowd", "x2_nostatic_seed1", "x2_nostatic_seed2"):
+        fp_n = e4.cheap_fingerprint(n, e4.recipe_opts(n, base))
+        assert fp_n["e4"] == fp_x2["e4"]
+        assert fp_n != fp_x2
+    fp_x3 = e4.cheap_fingerprint("x3_vn_nostatic", o_x3)
+    for n in ("x3_vn_nostatic_nowd", "x3_vn_nostatic_seed1", "x3_vn_nostatic_seed2"):
+        fp_n = e4.cheap_fingerprint(n, e4.recipe_opts(n, base))
+        assert fp_n["e4"] == fp_x3["e4"]
+        assert fp_n != fp_x3
+
+
+def test_min_train_loss_helper():
+    assert e4._min_train_loss({"epoch_curve": []}) is None
+    assert e4._min_train_loss({}) is None
+    rec = {"epoch_curve": [{"epoch": 0, "train_loss": 1.15}, {"epoch": 1, "train_loss": 1.0986},
+                           {"epoch": 2, "train_loss": 1.0986}]}
+    assert e4._min_train_loss(rec) == pytest.approx(1.0986)
 
 
 def test_vol_columns_are_named_and_part_of_the_champion_33():
@@ -421,6 +483,82 @@ def test_x2_x3_x4_end_to_end_dry_run_static_constant_reaches_the_model(tmp_path,
     assert res["x2_cslabel_nostatic"]["train"]["n_inputs"] == 33
 
 
+def test_collapse_diagnosis_six_recipes_weight_decay_and_seed_reach_training_idempotent_no_collision(
+        tmp_path, monkeypatch, small_min_names):
+    """CPU dry run of all 6 new recipes: weight_decay=0 must actually reach torch.optim.Adam as "no weight_decay
+    kwarg" (train.py's own convention: falsy weight_decay => omitted => Adam's true default of 0, see
+    training/train.py `opt_kwargs`), a positive weight_decay must reach it as that kwarg, each recipe's seed
+    must reach torch.manual_seed, a second invocation must retrain nothing (idempotent skip), and running the
+    x2/x3 parents afterwards in the same results file must not collide with (or overwrite) these 6 results."""
+    _no_budget(monkeypatch)
+    import torch
+    import training.train as train_mod
+
+    seeds_seen = []
+    real_manual_seed = torch.manual_seed
+
+    def spy_seed(s):
+        seeds_seen.append(s)
+        return real_manual_seed(s)
+    monkeypatch.setattr(torch, "manual_seed", spy_seed)
+
+    adam_kwargs = []
+    real_adam_init = torch.optim.Adam.__init__
+
+    def spy_adam_init(self, params, **kw):
+        adam_kwargs.append(kw)
+        return real_adam_init(self, params, **kw)
+    monkeypatch.setattr(torch.optim.Adam, "__init__", spy_adam_init)
+
+    real_train, calls = train_mod.train_one_epoch, {"n": 0}
+    monkeypatch.setattr(train_mod, "train_one_epoch",
+                        lambda *x, **k: (calls.__setitem__("n", calls["n"] + 1), real_train(*x, **k))[1])
+
+    data = FakeData()
+    data.expected_samples = _expected_counts(data)
+    new6 = ["x2_nostatic_nowd", "x3_vn_nostatic_nowd", "x2_nostatic_seed1", "x3_vn_nostatic_seed1",
+            "x2_nostatic_seed2", "x3_vn_nostatic_seed2"]
+    a = _args(tmp_path, "--recipes", *new6, "--epochs", "1")
+    assert e4.main(a, data=data) == 0
+    assert calls["n"] == 6
+    # torch.manual_seed is called twice per recipe (once in recipe_opts/run_recipe setup, once again inside
+    # run_training's per-epoch reseed -- with --epochs 1 that's seed+0 == the same value), in recipe order:
+    # nowd(seed 0), nowd(seed 0), seed1, seed1, seed2, seed2. Adjacent recipes share a seed value (both nowd
+    # variants default to seed 0, etc.), so a naive groupby over-collapses across the recipe boundary; the
+    # only value-based check that actually verifies per-recipe seeding is the full 12-call sequence.
+    assert seeds_seen == [0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2]
+    # train.py always passes lr as a kwarg (torch.optim.Adam(model.parameters(), lr=..., **opt_kwargs)); only
+    # weight_decay is conditionally included. weight_decay=0 is falsy -> opt_kwargs omits it entirely.
+    assert "weight_decay" not in adam_kwargs[0] and "weight_decay" not in adam_kwargs[1]
+    assert [kw["weight_decay"] for kw in adam_kwargs[2:]] == [pytest.approx(1e-3)] * 4   # seed recipes keep 1e-3
+
+    res = json.load(open(tmp_path / "art" / "e4_results.json"))
+    assert set(res) == set(new6)                                              # exactly the 6, no stray keys
+    exp_seed = {"x2_nostatic_nowd": 0, "x3_vn_nostatic_nowd": 0, "x2_nostatic_seed1": 1, "x3_vn_nostatic_seed1": 1,
+                "x2_nostatic_seed2": 2, "x3_vn_nostatic_seed2": 2}
+    exp_wd = {n: (0.0 if "nowd" in n else 1e-3) for n in new6}
+    for n in new6:
+        assert res[n]["seed"] == exp_seed[n] and res[n]["hparams"]["weight_decay"] == pytest.approx(exp_wd[n])
+
+    # idempotent: a second invocation retrains nothing and leaves the results file byte-identical
+    calls["n"] = 0
+    before = (tmp_path / "art" / "e4_results.json").read_text()
+    assert e4.main(a, data=data) == 0
+    assert calls["n"] == 0
+    assert (tmp_path / "art" / "e4_results.json").read_text() == before
+
+    # running the x2/x3 parents afterwards adds two more keys, none of the 6 are touched or overwritten
+    a2 = _args(tmp_path, "--recipes", "x2_cslabel_nostatic", "x3_vn_nostatic", "--epochs", "1")
+    assert e4.main(a2, data=data) == 0
+    res2 = json.load(open(tmp_path / "art" / "e4_results.json"))
+    assert set(res2) == set(new6) | {"x2_cslabel_nostatic", "x3_vn_nostatic"}
+    for n in new6:
+        assert res2[n] == res[n]                                              # untouched by the parent runs
+    assert res2["x2_cslabel_nostatic"]["fingerprint"] != res2["x2_nostatic_nowd"]["fingerprint"]
+    assert res2["x2_cslabel_nostatic"]["fingerprint"] != res2["x2_nostatic_seed1"]["fingerprint"]
+    assert res2["x3_vn_nostatic"]["fingerprint"] != res2["x3_vn_nostatic_nowd"]["fingerprint"]
+
+
 def test_oot_never_scored_per_epoch(tmp_path, monkeypatch, small_min_names):
     _no_budget(monkeypatch)
     windows = []
@@ -466,5 +604,31 @@ def test_render_doc_baseline_row_and_empty_states():
     assert "V3 seed 0" in md and "0.0412" in md and "_pending_" in md and "abc123" in md
     assert "volatility_20d" in md and "sector_volatility" in md and "ONCE" in md and "2025" in md
     assert "-0.0253" in md and "-0.0393" in md                                  # V3 timing IC quoted from the diagnosis doc
+    assert "min train_loss" in md and "1.0986" in md                            # collapse-diagnosis column + ln(3) reference
+    for n in COLLAPSE_DIAG_6:                                                   # pending rows for all 6 new recipes too
+        assert n in md
     md2 = e4.render_doc({}, {}, "abc")
     assert "V3 seed 0" in md2 and "not found" in md2
+
+
+def test_render_doc_shows_min_train_loss_and_flags_a_collapsed_curve():
+    results = {"x2_cslabel_nostatic": {
+        "best_epoch": 0, "best_val_timing_ic": 0.0153,
+        "train": {"last_epoch": 4, "stopped_reason": "early_stopping", "class_weights": [1.11, 0.83, 1.11],
+                  "n_train_samples": 100, "n_glitch_masked": 0},
+        "epoch_curve": [{"epoch": 0, "train_loss": 1.15, "val_loss": 1.0993, "val_timing_ic": 0.0153, "val_ic": -0.0003},
+                        {"epoch": 1, "train_loss": 1.0986, "val_loss": 1.1006, "val_timing_ic": 0.0132, "val_ic": -0.0539},
+                        {"epoch": 2, "train_loss": 1.0986, "val_loss": 1.0999, "val_timing_ic": 0.0051, "val_ic": -0.0539}],
+        "val_2024": {"decomposition": {"raw_ic": -0.0003, "raw_ic_se": 0.0067, "raw_ic_ir": -0.004,
+                                       "fixed_effect_ic": -0.008, "timing_ic": 0.0153, "timing_ic_se": 0.0059,
+                                       "timing_ic_ir": 0.19, "n_days_raw": 185, "timing_quantile_ls": 0.001},
+                    "signal": {"quantile_long_short": {"mean_spread": -0.0004}}, "metrics": {"macro_f1": 0.24}, "n_label_ok": 36929},
+        "oot_2026": {"decomposition": {"raw_ic": 0.0314, "raw_ic_se": 0.0091, "raw_ic_ir": 0.267,
+                                       "fixed_effect_ic": 0.0044, "timing_ic": 0.0237, "timing_ic_se": 0.0123,
+                                       "timing_ic_ir": 0.149, "n_days_raw": 167, "timing_quantile_ls": 0.0004},
+                    "signal": {"quantile_long_short": {"mean_spread": 0.0028}}, "metrics": {"macro_f1": 0.15}, "n_label_ok": 33364},
+    }}
+    md = e4.render_doc(results, {}, "abc123", recipes=["x2_cslabel_nostatic"])
+    assert "1.0986" in md                                                       # min train_loss column shows the collapse
+    assert "tloss 1.1500" in md and "tloss 1.0986" in md                        # per-epoch curve carries train_loss too
+    assert e4._min_train_loss(results["x2_cslabel_nostatic"]) == pytest.approx(1.0986)

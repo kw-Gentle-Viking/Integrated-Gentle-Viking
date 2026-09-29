@@ -30,6 +30,20 @@ idempotence come from training/run_tfx_experiments.py (unchanged); epoch resume 
 training/train.py / run_stage1_search.Budget. Resumable at epoch granularity; a recipe is recorded in
 e4_results.json only when finished; `--max-minutes` stops between epochs (exit 0, state resumable).
 
+Collapse diagnosis (x2/x3 finished first): both x2_cslabel_nostatic and x3_vn_nostatic show train_loss frozen
+at ln(3)~=1.0986 (3-class random-guess loss) after epoch 1, with val predictions identical to the decimal in
+every later epoch -- a degenerate "predict the class prior" fit, not real convergence. x1/x4 (static ids kept)
+train_loss keeps falling every epoch under the same hparams. weight_decay=1e-3 (Adam L2, inherited from V3) is
+one candidate cause once the static path is removed (a weak-signal model pulled to 0 fast); seed is the other.
+Six reruns test this, reusing x2/x3's label/static/vol_rank spec unchanged (only seed or weight_decay differ):
+  x2_nostatic_nowd / x3_vn_nostatic_nowd    x2/x3, weight_decay=0 (seed 0)
+  x2_nostatic_seed1 / x3_vn_nostatic_seed1  x2/x3, seed=1 (weight_decay 1e-3)
+  x2_nostatic_seed2 / x3_vn_nostatic_seed2  x2/x3, seed=2 (weight_decay 1e-3)
+Run order (weight_decay hypothesis checked first): x2_nostatic_nowd -> x3_vn_nostatic_nowd -> x2_nostatic_seed1
+-> x3_vn_nostatic_seed1 -> x2_nostatic_seed2 -> x3_vn_nostatic_seed2 (see DEFAULT_ORDER). Each is a fresh
+fingerprint (different seed/weight_decay in the recorded fingerprint's "seed"/"hparams" keys), so it cannot be
+skip-matched against x2/x3's already-recorded result, and vice versa.
+
     set -a && source .env && set +a
     PYTHONPATH=. python training/run_e4_experiments.py [--recipes x1_cslabel x2_cslabel_nostatic] [--max-minutes 600]
 
@@ -91,20 +105,43 @@ RECIPES = {
                            desc="volatility-normalised label (label_vn) + constant static ids"),
     "x4_cslabel_vnfeat": dict(tag="X4", label_source="cs", static_const=False, vol_rank=True,
                               desc="X1 + volatility_20d / sector_volatility as per-date cross-sectional percentile ranks"),
+    # Collapse diagnosis (x2/x3's train_loss freezes at ln(3) after epoch 1; see the module docstring). Same
+    # label/static/vol_rank spec as x2/x3 -- only `weight_decay` or `seed` differ from the WEIGHT_DECAY/SEED
+    # module defaults, via the optional per-recipe overrides `recipe_opts` reads.
+    "x2_nostatic_nowd": dict(tag="X2wd0", label_source="cs", static_const=True, vol_rank=False, weight_decay=0.0,
+                             desc="X2 (cs label, static ids const 0) + weight_decay=0 -- does removing Adam L2 "
+                                  "stop the 1-epoch train_loss freeze at ln(3)?"),
+    "x3_vn_nostatic_nowd": dict(tag="X3wd0", label_source="label_vn", static_const=True, vol_rank=False, weight_decay=0.0,
+                                desc="X3 (label_vn, static ids const 0) + weight_decay=0 -- does removing Adam L2 "
+                                     "stop the 1-epoch train_loss freeze at ln(3)?"),
+    "x2_nostatic_seed1": dict(tag="X2s1", label_source="cs", static_const=True, vol_rank=False, seed=1,
+                              desc="X2 (cs label, static ids const 0), seed=1 -- is the 1-epoch freeze seed-independent?"),
+    "x3_vn_nostatic_seed1": dict(tag="X3s1", label_source="label_vn", static_const=True, vol_rank=False, seed=1,
+                                 desc="X3 (label_vn, static ids const 0), seed=1 -- is the 1-epoch freeze seed-independent?"),
+    "x2_nostatic_seed2": dict(tag="X2s2", label_source="cs", static_const=True, vol_rank=False, seed=2,
+                              desc="X2 (cs label, static ids const 0), seed=2 -- is the 1-epoch freeze seed-independent?"),
+    "x3_vn_nostatic_seed2": dict(tag="X3s2", label_source="label_vn", static_const=True, vol_rank=False, seed=2,
+                                 desc="X3 (label_vn, static ids const 0), seed=2 -- is the 1-epoch freeze seed-independent?"),
 }
-DEFAULT_ORDER = ["x1_cslabel", "x2_cslabel_nostatic", "x3_vn_nostatic", "x4_cslabel_vnfeat"]
+DEFAULT_ORDER = ["x1_cslabel", "x2_cslabel_nostatic", "x3_vn_nostatic", "x4_cslabel_vnfeat",
+                  # weight_decay hypothesis checked first (cheaper to falsify), then the seed reruns.
+                  "x2_nostatic_nowd", "x3_vn_nostatic_nowd",
+                  "x2_nostatic_seed1", "x3_vn_nostatic_seed1", "x2_nostatic_seed2", "x3_vn_nostatic_seed2"]
 
 
 # --------------------------------------------------------------------------------------------
 # pure helpers (unit-tested in training/test_run_e4_experiments.py)
 # --------------------------------------------------------------------------------------------
 def recipe_opts(name: str, base: dict) -> dict:
-    """Per-recipe opts: champion hparams + weight_decay 1e-3, seed 0, patience 4, val-timing-IC selection.
-    `--state-size` (dry run) wins over the champion state size."""
-    hp = {**base["hparams"], "weight_decay": WEIGHT_DECAY}
+    """Per-recipe opts: champion hparams + weight_decay 1e-3, seed 0, patience 4, val-timing-IC selection --
+    unless the recipe's own RECIPES entry overrides `weight_decay` and/or `seed` (the collapse-diagnosis
+    reruns of x2/x3 do). `--state-size` (dry run) always wins over the champion state size."""
+    spec = RECIPES[name]
+    hp = {**base["hparams"], "weight_decay": spec.get("weight_decay", WEIGHT_DECAY)}
     if base.get("state_size_override"):
         hp["state_size"] = base["state_size_override"]
-    return {**base, "hparams": hp, "seed": SEED, "patience": PATIENCE, "select": SELECT_KEY, "align": "today"}
+    seed = spec.get("seed", SEED)
+    return {**base, "hparams": hp, "seed": seed, "patience": PATIENCE, "select": SELECT_KEY, "align": "today"}
 
 
 def label_col_of(name: str) -> str:
@@ -283,8 +320,19 @@ def _curve_line(rec: dict) -> str:
     for h in rec.get("epoch_curve", []):
         mark = "*" if h["epoch"] == be else ""
         parts.append(f"{h['epoch']}{mark}: timing {_signed(h.get('val_timing_ic'))} / raw {_signed(h.get('val_ic'))}"
-                     f" / loss {_fmt(h['val_loss'])}")
+                     f" / vloss {_fmt(h['val_loss'])} / tloss {_fmt(h.get('train_loss'))}")
     return "; ".join(parts) if parts else "n/a"
+
+
+LN3 = 1.0986  # 3-class random-guess cross-entropy loss; a train_loss stuck here past epoch 1 is a degenerate
+              # "predict the class prior" fit, not real convergence (see module docstring / x2 & x3 in E4).
+
+
+def _min_train_loss(rec: dict):
+    """min(train_loss) over `rec`'s epoch_curve, or None (curve is train.run_training's epoch_history, which
+    always carries train_loss -- None only for a pending/empty curve)."""
+    vals = [h["train_loss"] for h in rec.get("epoch_curve", []) if h.get("train_loss") is not None]
+    return min(vals) if vals else None
 
 
 def _v3_record(refs: dict):
@@ -338,8 +386,11 @@ def render_doc(results: dict, refs: dict, code_commit: str, recipes=None) -> str
         "(identical for all tickers on a date, a rank would be constant), `is_vi_triggered` / `vi_count_recent5d` (sparse "
         "event flags), `log_ret` / `disparity_*` / `rsi_14` (returns / momentum).", "",
         "## Recipes", "",
-        "| recipe | tag | label | static ids | vol inputs | description | epochs run / stop | best epoch | best val timing IC | class weights (buy/hold/sell) | train samples (glitch-masked rows) |",
-        "|---|---|---|---|---|---|---|---|---|---|---|",
+        f"`min train_loss` = the lowest train_loss over the run's epoch_curve; stuck at ln(3)~={LN3:.4f} (3-class "
+        "random-guess cross-entropy) past epoch 1 flags a degenerate class-prior fit rather than real learning "
+        "(see the module docstring; this is what x2_cslabel_nostatic / x3_vn_nostatic showed).", "",
+        "| recipe | tag | label | static ids | vol inputs | description | epochs run / stop | best epoch | best val timing IC | min train_loss | class weights (buy/hold/sell) | train samples (glitch-masked rows) |",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for n in recipes:
         sp, r = RECIPES[n], results.get(n)
@@ -347,11 +398,11 @@ def render_doc(results: dict, refs: dict, code_commit: str, recipes=None) -> str
         st = "const 0" if sp["static_const"] else "as is"
         vi = "cs rank" if sp["vol_rank"] else "raw"
         if r is None:
-            L.append(f"| {n} | {sp['tag']} | {lab} | {st} | {vi} | {sp['desc']} | _pending_ | | | | |")
+            L.append(f"| {n} | {sp['tag']} | {lab} | {st} | {vi} | {sp['desc']} | _pending_ | | | | | |")
             continue
         t = r["train"]
         L.append(f"| {n} | {sp['tag']} | {lab} | {st} | {vi} | {sp['desc']} | {t['last_epoch'] + 1} / {t['stopped_reason']} | "
-                 f"{_fmt(r.get('best_epoch'), 0)} | {_signed(r.get('best_val_timing_ic'))} | "
+                 f"{_fmt(r.get('best_epoch'), 0)} | {_signed(r.get('best_val_timing_ic'))} | {_fmt(_min_train_loss(r))} | "
                  f"{' / '.join(f'{w:.3f}' for w in t['class_weights'])} | {t['n_train_samples']} ({t['n_glitch_masked']}) |")
     L += [""]
 
@@ -558,7 +609,8 @@ def read_v3_reference(ref_dir: str, e2e3_path: str | None = None, tfx_path: str 
 def parse_args(argv=None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--recipes", nargs="+", default=list(DEFAULT_ORDER), choices=list(RECIPES),
-                   help="run order = the order given (default: x1 -> x2 -> x3 -> x4)")
+                   help="run order = the order given (default: x1 -> x2 -> x3 -> x4 -> "
+                        "x2_nostatic_nowd -> x3_vn_nostatic_nowd -> x2/x3_..._seed1 -> x2/x3_..._seed2)")
     p.add_argument("--max-minutes", type=float, default=600.0)
     p.add_argument("--artifacts-dir", default=None,
                    help=f"checkpoints + results JSON (default {ARTIFACTS_DIR}; REQUIRED with --max-tickers)")

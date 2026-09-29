@@ -2,7 +2,9 @@
 # e4-watch: a persistent supervisor around the resumable E4 timing-signal TFT experiments
 # (training/run_e4_experiments.py: x1_cslabel, x2_cslabel_nostatic, x3_vn_nostatic, x4_cslabel_vnfeat;
 # cross-sectional / volatility-normalised labels, constant static ids, cross-sectional volatility inputs;
-# checkpoint selection = val timing IC).
+# checkpoint selection = val timing IC; plus 6 collapse-diagnosis reruns of x2/x3 with weight_decay=0 or a
+# different seed -- x2_nostatic_nowd, x3_vn_nostatic_nowd, x2_nostatic_seed1, x3_vn_nostatic_seed1,
+# x2_nostatic_seed2, x3_vn_nostatic_seed2).
 #
 # Waits until the GPU has been idle, (re)starts the runner, and loops until every recipe in $RECIPES is
 # recorded in training/artifacts/e4_results.json. The runner resumes at EPOCH granularity, so an
@@ -30,7 +32,7 @@
 set -uo pipefail
 
 RESULTS="${RESULTS:-training/artifacts/e4_results.json}"
-RECIPES="${RECIPES:-x1_cslabel x2_cslabel_nostatic x3_vn_nostatic x4_cslabel_vnfeat}"
+RECIPES="${RECIPES:-x1_cslabel x2_cslabel_nostatic x3_vn_nostatic x4_cslabel_vnfeat x2_nostatic_nowd x3_vn_nostatic_nowd x2_nostatic_seed1 x3_vn_nostatic_seed1 x2_nostatic_seed2 x3_vn_nostatic_seed2}"
 PYTHON="${PYTHON:-/home/user/miniconda3/envs/dl_env/bin/python}"
 WORKTREE="${WORKTREE:-/home/user/AI_Gentle_Viking_RE/.worktrees/ai-model-redesign}"
 CONSECUTIVE_IDLE_CHECKS="${CONSECUTIVE_IDLE_CHECKS:-10}"
