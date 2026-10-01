@@ -42,19 +42,25 @@ def _frames(rets_by_date, tickers=None, glitch=None):
 ORIGINAL_4 = ["x1_cslabel", "x2_cslabel_nostatic", "x3_vn_nostatic", "x4_cslabel_vnfeat"]
 COLLAPSE_DIAG_6 = ["x2_nostatic_nowd", "x3_vn_nostatic_nowd", "x2_nostatic_seed1", "x3_vn_nostatic_seed1",
                    "x2_nostatic_seed2", "x3_vn_nostatic_seed2"]
+V3_STRUCTURE_NOWD = ["v3_structure_nowd"]
+ALL_11 = ORIGINAL_4 + COLLAPSE_DIAG_6 + V3_STRUCTURE_NOWD
 
 
 def test_recipe_table_and_order():
-    assert e4.DEFAULT_ORDER == ORIGINAL_4 + COLLAPSE_DIAG_6                    # original 4 untouched, then the 6 reruns
+    assert e4.DEFAULT_ORDER == ALL_11                                          # original 4, then the 6 reruns, then V3wd0 last
     assert e4.DEFAULT_ORDER[4:6] == ["x2_nostatic_nowd", "x3_vn_nostatic_nowd"]        # weight_decay hypothesis first
-    assert e4.DEFAULT_ORDER[6:] == ["x2_nostatic_seed1", "x3_vn_nostatic_seed1", "x2_nostatic_seed2", "x3_vn_nostatic_seed2"]
-    assert set(e4.RECIPES) == set(e4.DEFAULT_ORDER) == set(ORIGINAL_4) | set(COLLAPSE_DIAG_6)
-    assert len({e4.RECIPES[n]["tag"] for n in e4.RECIPES}) == 10               # every tag unique, old and new
+    assert e4.DEFAULT_ORDER[6:10] == ["x2_nostatic_seed1", "x3_vn_nostatic_seed1", "x2_nostatic_seed2", "x3_vn_nostatic_seed2"]
+    assert e4.DEFAULT_ORDER[10] == "v3_structure_nowd"                         # V3-structure weight_decay control, run last
+    assert set(e4.RECIPES) == set(e4.DEFAULT_ORDER) == set(ALL_11)
+    assert len({e4.RECIPES[n]["tag"] for n in e4.RECIPES}) == 11               # every tag unique, old and new
     r = e4.RECIPES
     assert (r["x1_cslabel"]["label_source"], r["x1_cslabel"]["static_const"], r["x1_cslabel"]["vol_rank"]) == ("cs", False, False)
     assert (r["x2_cslabel_nostatic"]["label_source"], r["x2_cslabel_nostatic"]["static_const"]) == ("cs", True)
     assert (r["x3_vn_nostatic"]["label_source"], r["x3_vn_nostatic"]["static_const"]) == ("label_vn", True)
     assert (r["x4_cslabel_vnfeat"]["label_source"], r["x4_cslabel_vnfeat"]["static_const"], r["x4_cslabel_vnfeat"]["vol_rank"]) == ("cs", False, True)
+    assert (r["v3_structure_nowd"]["label_source"], r["v3_structure_nowd"]["static_const"],
+            r["v3_structure_nowd"]["vol_rank"]) == ("label", False, False)
+    assert r["v3_structure_nowd"]["weight_decay"] == 0.0 and "seed" not in r["v3_structure_nowd"]
     assert e4.PATIENCE == 4 and e4.MAX_EPOCHS == 12 and e4.SELECT_KEY == "val_timing_ic"
     # the original 4 carry no seed/weight_decay override (module defaults apply)
     for n in ORIGINAL_4:
@@ -88,8 +94,9 @@ def test_recipe_opts_common_settings_and_fingerprints_differ():
     assert "weight_decay" not in base["hparams"] and base["seed"] == 5          # base not mutated
     assert e4.recipe_opts("x1_cslabel", {**base, "state_size_override": 8})["hparams"]["state_size"] == 8
     fps = {n: e4.cheap_fingerprint(n, e4.recipe_opts(n, base)) for n in e4.RECIPES}
-    assert len({json.dumps(f, sort_keys=True) for f in fps.values()}) == 10     # all 10 fingerprints distinct
+    assert len({json.dumps(f, sort_keys=True) for f in fps.values()}) == 11     # all 11 fingerprints distinct
     assert fps["x3_vn_nostatic"]["label_col"] == "label_vn" and fps["x1_cslabel"]["label_col"] == "cs_quantile"
+    assert fps["v3_structure_nowd"]["label_col"] == "label"                     # the SAME fixed label as V3 (not cs_quantile)
     assert fps["x4_cslabel_vnfeat"]["e4"]["vol_rank_cols"] == ["volatility_20d", "sector_volatility"]
     assert fps["x2_cslabel_nostatic"]["e4"]["static_const"] is True and fps["x1_cslabel"]["e4"]["static_const"] is False
     assert fps["x1_cslabel"]["selection"] == {"mode": "val_timing_ic", "patience": 4}
@@ -348,6 +355,66 @@ def test_prepare_x4_vol_columns_are_ranks_others_raw_labels_cs(monkeypatch):
         assert p4["eval_frames"][w]["T1"]["sector_volatility"].between(0, 1).all()
 
 
+def test_prepare_v3_structure_nowd_label_matches_v3_exactly(monkeypatch):
+    """The whole point of v3_structure_nowd is "V3 with weight_decay=0 and nothing else changed" -- this is the
+    load-bearing check that label_source="label" really does give it V3's own fixed-threshold label (not some
+    new E4 label), and that static_const=False / vol_rank=False leave every input exactly as V3 saw it. It
+    compares prepare_e4's output frame-for-frame against tfx.prepare_recipe("aligned", ...), which is the exact
+    code path e2e3's v3_wd (V3) was built from (BASE_RECIPE = "aligned" = R0, label_col="label", no preprocessing,
+    no rank inputs -- see training/run_e2e3_experiments.py BASE_RECIPE / RECIPES["v3_wd"])."""
+    monkeypatch.setattr(tfx, "MIN_NAMES_PER_DAY", 2)
+    data = FakeData()
+    champ = json.load(open(tfx.CHAMPION_CONFIG_PATH))
+    opts = {"champion": champ, "hparams": {k: champ[k] for k in ("state_size", "attention_heads", "lstm_layers", "dropout", "lr")},
+            "batch_size": 8, "align": "today"}
+
+    v3_prep = tfx.prepare_recipe("aligned", data, opts)                       # V3's own data prep (BASE_RECIPE)
+    assert data.calls == [("train", "label"), ("val_2024", "label"), ("oot_2026", "label")]   # label_col="label" only
+
+    data2 = FakeData()                                                        # fresh instance: FakeData is deterministic
+    e4_prep = e4.prepare_e4("v3_structure_nowd", data2, e4.recipe_opts("v3_structure_nowd", opts))
+    assert data2.calls == [("train", "label"), ("val_2024", "label"), ("oot_2026", "label")]  # same label source, nothing else
+
+    assert e4.label_col_of("v3_structure_nowd") == "label"
+    assert e4_prep["kept_columns"] == v3_prep["kept_columns"] and len(e4_prep["kept_columns"]) == 33
+    assert e4_prep["n_glitch_masked"] == v3_prep["n_glitch_masked"]
+    for tk in v3_prep["train_frames"]:
+        assert v3_prep["train_frames"][tk].equals(e4_prep["train_frames"][tk])
+        assert v3_prep["train_frames"][tk]["label"].equals(e4_prep["train_frames"][tk]["label"])
+    for tk in v3_prep["val_loss_frames"]:
+        assert v3_prep["val_loss_frames"][tk].equals(e4_prep["val_loss_frames"][tk])
+    for w in tfx.EVAL_WINDOWS:
+        for tk in v3_prep["eval_frames"][w]:
+            assert v3_prep["eval_frames"][w][tk].equals(e4_prep["eval_frames"][w][tk])
+    # and it is NOT the x1 cross-sectional label (sanity: the fixed label and the cs label actually differ here)
+    _, p1, _ = _prep("x1_cslabel", monkeypatch)
+    some_differ = any(not p1["train_frames"][tk]["label"].equals(e4_prep["train_frames"][tk]["label"])
+                      for tk in e4_prep["train_frames"])
+    assert some_differ
+
+
+def test_prepare_v3_structure_nowd_keeps_static_ids_as_is(monkeypatch):
+    data, p, _ = _prep("v3_structure_nowd", monkeypatch)
+    raw = tfx.attach_next_day_return(data.frames("train", "label"), data.next_day_returns("train"))
+    for tk in p["train_frames"]:
+        assert p["train_frames"][tk][list(STATIC_COLS)].equals(raw[tk][list(STATIC_COLS)])
+    assert len({p["train_frames"][tk]["sector_id"].iloc[0] for tk in p["train_frames"]}) > 1    # not all constant 0
+
+
+def test_v3_structure_nowd_opts_and_fingerprint():
+    base = {"hparams": {"lr": 3e-4, "dropout": 0.17, "state_size": 32}, "batch_size": 8, "align": "today"}
+    o = e4.recipe_opts("v3_structure_nowd", base)
+    assert o["hparams"]["weight_decay"] == 0.0 and o["seed"] == 0 and o["select"] == "val_timing_ic"
+    fp = e4.cheap_fingerprint("v3_structure_nowd", o)
+    # "label" is not label_vn, so the "label_vn"-only threshold-dict wrapping in e4.cheap_fingerprint never fires:
+    # fp["threshold"] is read_threshold("label", ...) straight from tfx, byte-identical in shape to V3's own fingerprint.
+    assert fp["label_col"] == "label" and fp["threshold"] == tfx.read_threshold("label")
+    assert fp["e4"]["label_source"] == "label" and fp["e4"]["static_const"] is False and fp["e4"]["vol_rank_cols"] == []
+    # distinct from every other recipe's fingerprint, in particular x1 (same static/vol_rank spec, different label)
+    fp_x1 = e4.cheap_fingerprint("x1_cslabel", e4.recipe_opts("x1_cslabel", base))
+    assert fp != fp_x1 and fp["label_col"] != fp_x1["label_col"]
+
+
 # ---------------- per-epoch metric hook ----------------
 def test_timing_fn_uses_window_mean_and_returns_plain_floats(tmp_path):
     import torch
@@ -559,6 +626,67 @@ def test_collapse_diagnosis_six_recipes_weight_decay_and_seed_reach_training_ide
     assert res2["x3_vn_nostatic"]["fingerprint"] != res2["x3_vn_nostatic_nowd"]["fingerprint"]
 
 
+def test_v3_structure_nowd_end_to_end_dry_run_static_kept_wd_omitted_and_idempotent(tmp_path, monkeypatch, small_min_names):
+    """CPU dry run of v3_structure_nowd alone: static ids must reach the model UNCHANGED (unlike x2/x3), Adam
+    must see no weight_decay kwarg at all (train.py's falsy-omits convention, same as the nowd collapse-diagnosis
+    recipes), the recorded fingerprint's label_col must be "label" (V3's own fixed label, not cs_quantile /
+    label_vn), docs/e4_experiments.md must render it correctly, docs/model_versions.md's row must say the
+    correct weight_decay (not the old hardcoded "1e-3" text bug), and a second invocation must retrain nothing."""
+    _no_budget(monkeypatch)
+    import torch
+    import training.train as train_mod
+
+    seen = {}
+    real = train_mod.train_one_epoch
+
+    def spy(model, loader, *a, **k):
+        b = next(iter(loader))
+        seen.setdefault("static", []).append(b["static_feats_categorical"].unique().tolist())
+        return real(model, loader, *a, **k)
+    monkeypatch.setattr(train_mod, "train_one_epoch", spy)
+
+    adam_kwargs = []
+    real_adam_init = torch.optim.Adam.__init__
+
+    def spy_adam_init(self, params, **kw):
+        adam_kwargs.append(kw)
+        return real_adam_init(self, params, **kw)
+    monkeypatch.setattr(torch.optim.Adam, "__init__", spy_adam_init)
+
+    real_train, calls = train_mod.train_one_epoch, {"n": 0}
+    data = FakeData()
+    data.expected_samples = _expected_counts(data)
+    a = _args(tmp_path, "--recipes", "v3_structure_nowd", "--epochs", "1")
+    assert e4.main(a, data=data) == 0
+    assert seen["static"][0] != [0]                                           # static ids kept as-is, NOT constant 0
+    assert "weight_decay" not in adam_kwargs[0]                               # wd=0 -> omitted, same as x2/x3_..._nowd
+
+    res = json.load(open(tmp_path / "art" / "e4_results.json"))
+    assert list(res) == ["v3_structure_nowd"]
+    rec = res["v3_structure_nowd"]
+    assert rec["label_source"] == "label" and rec["static_const"] is False and rec["vol_rank_cols"] == []
+    assert rec["hparams"]["weight_decay"] == 0.0 and rec["seed"] == 0
+    assert rec["fingerprint"]["label_col"] == "label"
+
+    doc = (tmp_path / "doc.md").read_text()
+    assert "v3_structure_nowd" in doc and "V3wd0" in doc and "fixed label (V3)" in doc
+
+    mv = (tmp_path / "mv.md").read_text()
+    row = next(l for l in mv.splitlines() if l.startswith("| e4-v3_structure_nowd "))
+    assert "weight_decay=0," in row and "weight_decay=1e-3" not in row
+    assert "고정 임계값 라벨" in row
+
+    # idempotent: a second invocation retrains nothing and leaves both outputs byte-identical
+    before_res, before_mv = (tmp_path / "art" / "e4_results.json").read_text(), mv
+    calls["n"] = 0
+    monkeypatch.setattr(train_mod, "train_one_epoch",
+                        lambda *x, **k: (calls.__setitem__("n", calls["n"] + 1), real_train(*x, **k))[1])
+    assert e4.main(a, data=data) == 0
+    assert calls["n"] == 0
+    assert (tmp_path / "art" / "e4_results.json").read_text() == before_res
+    assert (tmp_path / "mv.md").read_text() == before_mv
+
+
 def test_oot_never_scored_per_epoch(tmp_path, monkeypatch, small_min_names):
     _no_budget(monkeypatch)
     windows = []
@@ -607,6 +735,11 @@ def test_render_doc_baseline_row_and_empty_states():
     assert "min train_loss" in md and "1.0986" in md                            # collapse-diagnosis column + ln(3) reference
     for n in COLLAPSE_DIAG_6:                                                   # pending rows for all 6 new recipes too
         assert n in md
+    assert "v3_structure_nowd" in md and "V3wd0" in md
+    # the recipe-table row's label cell must say it's V3's fixed label, NOT be mislabeled "label_vn" (the old
+    # two-way "cs" vs "label_vn" ternary would have silently mislabeled any non-cs, non-label_vn recipe).
+    row = next(l for l in md.splitlines() if l.startswith("| v3_structure_nowd |"))
+    assert "| fixed label (V3) |" in row and "label_vn" not in row
     md2 = e4.render_doc({}, {}, "abc")
     assert "V3 seed 0" in md2 and "not found" in md2
 

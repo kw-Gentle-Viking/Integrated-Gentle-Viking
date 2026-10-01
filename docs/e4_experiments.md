@@ -1,6 +1,6 @@
 # E4: timing-signal experiments (TFT, R0 base)
 
-Background: `docs/signal_diagnosis.md`. Code commit: `db3e2a4` (`training/run_e4_experiments.py`, `training/signal_diagnostics.py`, reuses `training/run_tfx_experiments.py`). Raw output: `training/artifacts/e4_results.json` (gitignored). Baseline row = V3 seed 0 (`v3_wd` of `training/artifacts/e2e3_results.json`), not retrained.
+Background: `docs/signal_diagnosis.md`. Code commit: `6ef98f8+dirty` (`training/run_e4_experiments.py`, `training/signal_diagnostics.py`, reuses `training/run_tfx_experiments.py`). Raw output: `training/artifacts/e4_results.json` (gitignored). Baseline row = V3 seed 0 (`v3_wd` of `training/artifacts/e2e3_results.json`), not retrained.
 
 **Goal.** V3's IC of ~0.04 is entirely a fixed per-ticker ranking (identical to a low-volatility factor); its timing IC (score minus the ticker's mean score) is negative: val -0.0253, OOT -0.0393. The fixed label threshold (+-1.238%) makes volatile tickers BUY/SELL-heavy, so ticker volatility is the easiest thing to learn. E4 keeps the TFT and changes the label / inputs so that the only thing left to learn is timing. Success criterion: timing IC > 0 (val AND OOT), not raw IC.
 
@@ -12,6 +12,7 @@ Background: `docs/signal_diagnosis.md`. Code commit: `db3e2a4` (`training/run_e4
 - **Timing IC.** score = p_buy - p_sell. fixed effect = the ticker's mean score (val window: its own mean over the window; OOT: the val-window means of the SAME final checkpoint - scores only, never returns). timing = score - fixed effect. All three ICs (raw, fixed-effect, timing) use the `evaluation.evaluate` daily Spearman rule (>= 20 names per day, constant days skipped; SE = std / sqrt(days)). Per-epoch val curve: timing / raw IC / val loss.
 - **Cross-sectional label (X1, X2, X4).** Per trading day, over the names with a valid next_day_return: top 30% = BUY(0), bottom 30% = SELL(2), rest HOLD(1). Average-rank percentile p = (rank - 0.5)/n; BUY if p >= 0.7, SELL if p <= 0.3 (tied returns share one label; no dependence on ticker order). Days with fewer than 20 eligible names -> NaN. Glitch rows (|next_day_return| > 0.31) are masked out of the TRAIN frames BEFORE the ranks are formed. The label replaces the `label` column of the train / val-loss / eval frames, so `TickerDayDataset` is unchanged. Macro F1 is against each recipe's own label: X1/X2/X4 (cs label) and X3 (label_vn) F1 values, and V3's fixed-label F1, are NOT comparable with each other.
 - **Constant static ids (X2, X3).** `sector_id` and `market_id` are set to 0 in every frame; the model still has its two static embeddings (cardinalities unchanged), they just always receive id 0.
+- **V3wd0 (`v3_structure_nowd`).** `label_source="label"`: the SAME fixed-threshold label as V3 (`label_col_of` falls through to the raw column name; `prepare_e4` skips `cs_label_frames` and loads `data.frames(split, "label")` unchanged, same as `tfx.prepare_recipe("aligned", ...)`). Static ids and vol inputs are left alone (`static_const=False`, `vol_rank=False`, matching X1/X4/V3), every other hparam matches V3 (e2e3 `v3_wd`) -- only `weight_decay` is 0 instead of 1e-3. Isolates the weight_decay fix from the static-id removal that the collapse-diagnosis reruns (X2wd0/X3wd0) always combined it with; its F1 IS comparable to V3's (same label).
 - **Volatility inputs as cross-sectional ranks (X4).** In every frame (train / val / OOT) these columns of the 33 are replaced, under the same column name, by their per-date percentile rank in (0, 1] over the tickers of that date (average ranks; same-date information only): `volatility_20d`, `sector_volatility`. `volatility_20d` is the ticker's 20-day std of log returns; `sector_volatility` = (high - low) / close of the ticker's sector index (it identifies the sector's range). Deliberately NOT ranked: `vix_chg` and the other market-wide columns (identical for all tickers on a date, a rank would be constant), `is_vi_triggered` / `vi_count_recent5d` (sparse event flags), `log_ret` / `disparity_*` / `rsi_14` (returns / momentum).
 
 ## Recipes
@@ -30,6 +31,7 @@ Background: `docs/signal_diagnosis.md`. Code commit: `db3e2a4` (`training/run_e4
 | x3_vn_nostatic_seed1 | X3s1 | label_vn | const 0 | raw | X3 (label_vn, static ids const 0), seed=1 -- is the 1-epoch freeze seed-independent? | 5 / early_stopping | 0 | +0.0195 | 1.0987 | 1.388 / 0.667 / 1.281 | 234226 (0) |
 | x2_nostatic_seed2 | X2s2 | cs quantile 30/30 | const 0 | raw | X2 (cs label, static ids const 0), seed=2 -- is the 1-epoch freeze seed-independent? | 5 / early_stopping | 0 | +0.0145 | 1.0989 | 1.110 / 0.834 / 1.111 | 234226 (0) |
 | x3_vn_nostatic_seed2 | X3s2 | label_vn | const 0 | raw | X3 (label_vn, static ids const 0), seed=2 -- is the 1-epoch freeze seed-independent? | 5 / early_stopping | 0 | +0.0073 | 1.0987 | 1.388 / 0.667 / 1.281 | 234226 (0) |
+| v3_structure_nowd | V3wd0 | fixed label (V3) | as is | raw | V3(e2e3 v3_wd)와 라벨/정적변수/하이퍼파라미터 전부 동일, weight_decay만 0 -- does the wd=0 fix help timing IC with static ids (and the V3 label) left alone? | _pending_ | | | | | |
 
 ## val_2024 (selection window; timing IC of the selected epoch)
 
@@ -46,6 +48,7 @@ Background: `docs/signal_diagnosis.md`. Code commit: `db3e2a4` (`training/run_e4
 | **X3s1 x3_vn_nostatic_seed1** | +0.0029 | 0.0093 | 0.023 | -0.0280 | +0.0195 | 0.0065 | 0.222 | 185 | 0.02% | 0.14% | 0.1380 (36929 lbl) | 0 | 5 |
 | **X2s2 x2_nostatic_seed2** | +0.0030 | 0.0071 | 0.030 | -0.0041 | +0.0145 | 0.0060 | 0.176 | 185 | -0.02% | 0.10% | 0.1539 (36929 lbl) | 0 | 5 |
 | **X3s2 x3_vn_nostatic_seed2** | +0.0080 | 0.0075 | 0.079 | +0.0130 | +0.0073 | 0.0073 | 0.073 | 185 | 0.10% | 0.10% | 0.2924 (36929 lbl) | 0 | 5 |
+| V3wd0 v3_structure_nowd | _pending_ | | | | | | | | | | | | |
 
 † V3 fixed-effect / timing IC are quoted from `docs/signal_diagnosis.md` (computed from the V3 score dump); raw IC / IR / quantile L/S / F1 are read from the results JSON. 
 
@@ -64,6 +67,7 @@ Background: `docs/signal_diagnosis.md`. Code commit: `db3e2a4` (`training/run_e4
 | **X3s1 x3_vn_nostatic_seed1** | -0.0057 | 0.0119 | -0.037 | -0.0112 | -0.0006 | 0.0088 | -0.006 | 167 | -0.18% | -0.09% | 0.1370 (33364 lbl) | 0 | 5 |
 | **X2s2 x2_nostatic_seed2** | +0.0152 | 0.0122 | 0.097 | -0.0081 | +0.0133 | 0.0108 | 0.096 | 167 | 0.02% | 0.02% | 0.1539 (33364 lbl) | 0 | 5 |
 | **X3s2 x3_vn_nostatic_seed2** | +0.0291 | 0.0091 | 0.246 | +0.0142 | +0.0103 | 0.0098 | 0.082 | 167 | 0.25% | 0.09% | 0.1370 (33364 lbl) | 0 | 5 |
+| V3wd0 v3_structure_nowd | _pending_ | | | | | | | | | | | | |
 
 † V3 fixed-effect / timing IC are quoted from `docs/signal_diagnosis.md` (computed from the V3 score dump); raw IC / IR / quantile L/S / F1 are read from the results JSON. 
 

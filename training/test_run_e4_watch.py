@@ -27,18 +27,19 @@ def test_sourcing_does_not_run_the_watcher(tmp_path):
 TEN_RECIPES = ["x1_cslabel", "x2_cslabel_nostatic", "x3_vn_nostatic", "x4_cslabel_vnfeat", "x2_nostatic_nowd",
                "x3_vn_nostatic_nowd", "x2_nostatic_seed1", "x3_vn_nostatic_seed1", "x2_nostatic_seed2",
                "x3_vn_nostatic_seed2"]
+ELEVEN_RECIPES = TEN_RECIPES + ["v3_structure_nowd"]
 
 
-def test_done_check_default_recipes_covers_all_ten(tmp_path):
-    """e4_done with NO $RECIPES override (the watcher's own default) must require all 10 recipes, including the
-    6 collapse-diagnosis reruns, not just the original 4."""
+def test_done_check_default_recipes_covers_all_eleven(tmp_path):
+    """e4_done with NO $RECIPES override (the watcher's own default) must require all 11 recipes, including the
+    6 collapse-diagnosis reruns and the v3_structure_nowd weight_decay control, not just the original 4."""
     p = tmp_path / "res.json"
     env = {k: v for k, v in os.environ.items() if k != "RECIPES"}
     env["RESULTS"] = str(p)
-    p.write_text(json.dumps({n: {} for n in TEN_RECIPES if n != "x2_nostatic_seed2"}))
+    p.write_text(json.dumps({n: {} for n in ELEVEN_RECIPES if n != "v3_structure_nowd"}))
     r = subprocess.run(["bash", "-c", f'source "{SCRIPT}"; e4_done'], env=env)
-    assert r.returncode != 0                                                   # one of the 6 new ones still missing
-    p.write_text(json.dumps({n: {} for n in TEN_RECIPES}))
+    assert r.returncode != 0                                                   # v3_structure_nowd still missing
+    p.write_text(json.dumps({n: {} for n in ELEVEN_RECIPES}))
     r = subprocess.run(["bash", "-c", f'source "{SCRIPT}"; e4_done'], env=env)
     assert r.returncode == 0
 
@@ -88,11 +89,11 @@ def _run_watcher(tmp_path, py_body, extra_env=None, nvsmi=NVSMI_OK):
 
 
 ALL_4_JSON = '{"x1_cslabel":{},"x2_cslabel_nostatic":{},"x3_vn_nostatic":{},"x4_cslabel_vnfeat":{}}'
-ALL_10_JSON = '{' + ','.join(f'"{n}":{{}}' for n in TEN_RECIPES) + '}'         # matches the watcher's default $RECIPES
+ALL_11_JSON = '{' + ','.join(f'"{n}":{{}}' for n in ELEVEN_RECIPES) + '}'       # matches the watcher's default $RECIPES
 
 
 def test_watcher_completes_when_runner_records_all_recipes(tmp_path):
-    body = f'echo \'{ALL_10_JSON}\' > "$RESULTS"\nexit 0\n'
+    body = f'echo \'{ALL_11_JSON}\' > "$RESULTS"\nexit 0\n'
     r, _ = _run_watcher(tmp_path, body)
     assert r.returncode == 0 and "e4 experiments COMPLETE" in r.stdout
     assert "utilization=0% x3" in r.stdout
@@ -107,7 +108,7 @@ def test_watcher_cools_down_and_resumes_after_signal_kill(tmp_path):
     counter = tmp_path / "count"
     body = (f'n=$(cat "{counter}" 2>/dev/null || echo 0); echo $((n+1)) > "{counter}"\n'
             'if [ "$n" -eq 0 ]; then exit 143; fi\n'
-            f'echo \'{ALL_10_JSON}\' > "$RESULTS"\nexit 0\n')
+            f'echo \'{ALL_11_JSON}\' > "$RESULTS"\nexit 0\n')
     r, _ = _run_watcher(tmp_path, body)
     assert r.returncode == 0 and "Killed by user signal (rc=143)" in r.stdout and "COMPLETE" in r.stdout
     assert "Quick failure" not in r.stdout
@@ -176,5 +177,5 @@ def test_default_recipe_list_and_results_file_and_runner():
                        timeout=20, env={k: v for k, v in os.environ.items() if k not in ("RECIPES", "RESULTS")})
     assert r.stdout.strip() == ("x1_cslabel x2_cslabel_nostatic x3_vn_nostatic x4_cslabel_vnfeat "
                                 "x2_nostatic_nowd x3_vn_nostatic_nowd x2_nostatic_seed1 x3_vn_nostatic_seed1 "
-                                "x2_nostatic_seed2 x3_vn_nostatic_seed2|training/artifacts/e4_results.json")
+                                "x2_nostatic_seed2 x3_vn_nostatic_seed2 v3_structure_nowd|training/artifacts/e4_results.json")
     assert "run_e4_experiments.py" in open(SCRIPT).read() and "run_tfx_experiments" not in open(SCRIPT).read()

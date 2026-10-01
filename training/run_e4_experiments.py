@@ -44,6 +44,13 @@ Run order (weight_decay hypothesis checked first): x2_nostatic_nowd -> x3_vn_nos
 fingerprint (different seed/weight_decay in the recorded fingerprint's "seed"/"hparams" keys), so it cannot be
 skip-matched against x2/x3's already-recorded result, and vice versa.
 
+V3-structure weight_decay control (v3_structure_nowd, run last): the six collapse-diagnosis reruns only ever
+tested weight_decay=0 together with static ids REMOVED (x2_nostatic_nowd / x3_vn_nostatic_nowd). V3's own
+structure (static ids kept, fixed label) was never retried with just weight_decay=0. v3_structure_nowd =
+V3 (e2e3 `v3_wd`: label_source="label" i.e. the same fixed-threshold `label` column, static_const=False,
+vol_rank=False, same champion hparams) with weight_decay=0 instead of 1e-3 -- the single-variable control that
+isolates the weight_decay fix from the static-id change.
+
     set -a && source .env && set +a
     PYTHONPATH=. python training/run_e4_experiments.py [--recipes x1_cslabel x2_cslabel_nostatic] [--max-minutes 600]
 
@@ -122,11 +129,23 @@ RECIPES = {
                               desc="X2 (cs label, static ids const 0), seed=2 -- is the 1-epoch freeze seed-independent?"),
     "x3_vn_nostatic_seed2": dict(tag="X3s2", label_source="label_vn", static_const=True, vol_rank=False, seed=2,
                                  desc="X3 (label_vn, static ids const 0), seed=2 -- is the 1-epoch freeze seed-independent?"),
+    # V3-structure control: the collapse diagnosis only ever tested weight_decay=0 together with static ids
+    # removed (x2_nostatic_nowd / x3_vn_nostatic_nowd). This recipe isolates the weight_decay fix alone: same
+    # label, same static ids, same every other hparam as V3 (e2e3 `v3_wd`: BASE_RECIPE "aligned" = R0, label_col
+    # "label", static ids untouched) -- only weight_decay is 0 instead of 1e-3. label_source="label" reuses
+    # prepare_e4's "not cs, not label_vn" branch, which loads data.frames(split, "label") unchanged and skips
+    # cs_label_frames entirely, i.e. the exact same fixed-threshold label V3 trains/evaluates on (see
+    # training/test_run_e4_experiments.py::test_prepare_v3_structure_nowd_label_matches_v3_exactly, which asserts
+    # byte-identical frames against tfx.prepare_recipe("aligned", ...)).
+    "v3_structure_nowd": dict(tag="V3wd0", label_source="label", static_const=False, vol_rank=False, weight_decay=0.0,
+                              desc="V3(e2e3 v3_wd)와 라벨/정적변수/하이퍼파라미터 전부 동일, weight_decay만 0 -- "
+                                   "does the wd=0 fix help timing IC with static ids (and the V3 label) left alone?"),
 }
 DEFAULT_ORDER = ["x1_cslabel", "x2_cslabel_nostatic", "x3_vn_nostatic", "x4_cslabel_vnfeat",
                   # weight_decay hypothesis checked first (cheaper to falsify), then the seed reruns.
                   "x2_nostatic_nowd", "x3_vn_nostatic_nowd",
-                  "x2_nostatic_seed1", "x3_vn_nostatic_seed1", "x2_nostatic_seed2", "x3_vn_nostatic_seed2"]
+                  "x2_nostatic_seed1", "x3_vn_nostatic_seed1", "x2_nostatic_seed2", "x3_vn_nostatic_seed2",
+                  "v3_structure_nowd"]
 
 
 # --------------------------------------------------------------------------------------------
@@ -378,6 +397,12 @@ def render_doc(results: dict, refs: dict, code_commit: str, recipes=None) -> str
         "and X3 (label_vn) F1 values, and V3's fixed-label F1, are NOT comparable with each other.",
         "- **Constant static ids (X2, X3).** `sector_id` and `market_id` are set to 0 in every frame; the model still has its "
         "two static embeddings (cardinalities unchanged), they just always receive id 0.",
+        "- **V3wd0 (`v3_structure_nowd`).** `label_source=\"label\"`: the SAME fixed-threshold label as V3 (`label_col_of` "
+        "falls through to the raw column name; `prepare_e4` skips `cs_label_frames` and loads `data.frames(split, \"label\")` "
+        "unchanged, same as `tfx.prepare_recipe(\"aligned\", ...)`). Static ids and vol inputs are left alone (`static_const=False`, "
+        "`vol_rank=False`, matching X1/X4/V3), every other hparam matches V3 (e2e3 `v3_wd`) -- only `weight_decay` is 0 instead "
+        "of 1e-3. Isolates the weight_decay fix from the static-id removal that the collapse-diagnosis reruns (X2wd0/X3wd0) "
+        "always combined it with; its F1 IS comparable to V3's (same label).",
         "- **Volatility inputs as cross-sectional ranks (X4).** In every frame (train / val / OOT) these columns of the 33 are "
         "replaced, under the same column name, by their per-date percentile rank in (0, 1] over the tickers of that date "
         "(average ranks; same-date information only): " + ", ".join(f"`{c}`" for c in VOL_RANK_COLS) + ". `volatility_20d` is "
@@ -394,7 +419,7 @@ def render_doc(results: dict, refs: dict, code_commit: str, recipes=None) -> str
     ]
     for n in recipes:
         sp, r = RECIPES[n], results.get(n)
-        lab = "cs quantile 30/30" if sp["label_source"] == "cs" else "label_vn"
+        lab = {"cs": "cs quantile 30/30", "label_vn": "label_vn", "label": "fixed label (V3)"}[sp["label_source"]]
         st = "const 0" if sp["static_const"] else "as is"
         vi = "cs rank" if sp["vol_rank"] else "raw"
         if r is None:
@@ -583,10 +608,12 @@ def record_model_version(name: str, rec: dict, path: str) -> None:
         return
     from training import run_stage1_search as rss
     t, v, o = rec["train"], rec["val_2024"], rec["oot_2026"]
-    lab = "날짜별 횡단면 분위 라벨(상위30% 매수/하위30% 매도)" if rec["label_source"] == "cs" else "label_vn"
+    lab = {"cs": "날짜별 횡단면 분위 라벨(상위30% 매수/하위30% 매도)", "label_vn": "label_vn",
+           "label": "고정 임계값 라벨(V3와 동일, label)"}[rec["label_source"]]
     extra = (", 정적 범주 sector_id/market_id 상수 0" if rec["static_const"] else "") + \
             (f", 변동성 열 횡단면 순위 치환({', '.join(rec['vol_rank_cols'])})" if rec["vol_rank_cols"] else "")
-    desc = f"R0 기반(33컬럼 원본, align={rec['align']}), 라벨={lab}{extra}, weight_decay=1e-3, seed={rec['seed']}, 체크포인트 선택=val 타이밍 IC"
+    wd = rec["hparams"].get("weight_decay", 0)
+    desc = f"R0 기반(33컬럼 원본, align={rec['align']}), 라벨={lab}{extra}, weight_decay={wd:g}, seed={rec['seed']}, 체크포인트 선택=val 타이밍 IC"
     note = (f"E4 {rec['tag']}, best_epoch={rec['best_epoch']}, epochs_run={t['last_epoch'] + 1}({t['stopped_reason']}), "
             f"val 타이밍 IC={_signed(v['decomposition']['timing_ic'])}(선택 기준), val 원점수 IC={_signed(v['decomposition']['raw_ic'])}, "
             f"OOT 타이밍 IC={_signed(o['decomposition']['timing_ic'])}/원점수 IC={_signed(o['decomposition']['raw_ic'])}"
