@@ -1,6 +1,6 @@
 # E4: timing-signal experiments (TFT, R0 base)
 
-Background: `docs/signal_diagnosis.md`. Code commit: `6ef98f8+dirty` (`training/run_e4_experiments.py`, `training/signal_diagnostics.py`, reuses `training/run_tfx_experiments.py`). Raw output: `training/artifacts/e4_results.json` (gitignored). Baseline row = V3 seed 0 (`v3_wd` of `training/artifacts/e2e3_results.json`), not retrained.
+Background: `docs/signal_diagnosis.md`. Code commit: `1521c30` (`training/run_e4_experiments.py`, `training/signal_diagnostics.py`, reuses `training/run_tfx_experiments.py`). Raw output: `training/artifacts/e4_results.json` (gitignored). Baseline row = V3 seed 0 (`v3_wd` of `training/artifacts/e2e3_results.json`), not retrained.
 
 **Goal.** V3's IC of ~0.04 is entirely a fixed per-ticker ranking (identical to a low-volatility factor); its timing IC (score minus the ticker's mean score) is negative: val -0.0253, OOT -0.0393. The fixed label threshold (+-1.238%) makes volatile tickers BUY/SELL-heavy, so ticker volatility is the easiest thing to learn. E4 keeps the TFT and changes the label / inputs so that the only thing left to learn is timing. Success criterion: timing IC > 0 (val AND OOT), not raw IC.
 
@@ -31,7 +31,7 @@ Background: `docs/signal_diagnosis.md`. Code commit: `6ef98f8+dirty` (`training/
 | x3_vn_nostatic_seed1 | X3s1 | label_vn | const 0 | raw | X3 (label_vn, static ids const 0), seed=1 -- is the 1-epoch freeze seed-independent? | 5 / early_stopping | 0 | +0.0195 | 1.0987 | 1.388 / 0.667 / 1.281 | 234226 (0) |
 | x2_nostatic_seed2 | X2s2 | cs quantile 30/30 | const 0 | raw | X2 (cs label, static ids const 0), seed=2 -- is the 1-epoch freeze seed-independent? | 5 / early_stopping | 0 | +0.0145 | 1.0989 | 1.110 / 0.834 / 1.111 | 234226 (0) |
 | x3_vn_nostatic_seed2 | X3s2 | label_vn | const 0 | raw | X3 (label_vn, static ids const 0), seed=2 -- is the 1-epoch freeze seed-independent? | 5 / early_stopping | 0 | +0.0073 | 1.0987 | 1.388 / 0.667 / 1.281 | 234226 (0) |
-| v3_structure_nowd | V3wd0 | fixed label (V3) | as is | raw | V3(e2e3 v3_wd)와 라벨/정적변수/하이퍼파라미터 전부 동일, weight_decay만 0 -- does the wd=0 fix help timing IC with static ids (and the V3 label) left alone? | _pending_ | | | | | |
+| v3_structure_nowd | V3wd0 | fixed label (V3) | as is | raw | V3(e2e3 v3_wd)와 라벨/정적변수/하이퍼파라미터 전부 동일, weight_decay만 0 -- does the wd=0 fix help timing IC with static ids (and the V3 label) left alone? | 8 / early_stopping | 3 | +0.0481 | 0.9807 | 1.386 / 0.669 / 1.276 | 234226 (0) |
 
 ## val_2024 (selection window; timing IC of the selected epoch)
 
@@ -48,7 +48,7 @@ Background: `docs/signal_diagnosis.md`. Code commit: `6ef98f8+dirty` (`training/
 | **X3s1 x3_vn_nostatic_seed1** | +0.0029 | 0.0093 | 0.023 | -0.0280 | +0.0195 | 0.0065 | 0.222 | 185 | 0.02% | 0.14% | 0.1380 (36929 lbl) | 0 | 5 |
 | **X2s2 x2_nostatic_seed2** | +0.0030 | 0.0071 | 0.030 | -0.0041 | +0.0145 | 0.0060 | 0.176 | 185 | -0.02% | 0.10% | 0.1539 (36929 lbl) | 0 | 5 |
 | **X3s2 x3_vn_nostatic_seed2** | +0.0080 | 0.0075 | 0.079 | +0.0130 | +0.0073 | 0.0073 | 0.073 | 185 | 0.10% | 0.10% | 0.2924 (36929 lbl) | 0 | 5 |
-| V3wd0 v3_structure_nowd | _pending_ | | | | | | | | | | | | |
+| **V3wd0 v3_structure_nowd** | +0.0473 | 0.0102 | 0.340 | -0.0025 | +0.0481 | 0.0104 | 0.341 | 185 | 0.21% | 0.31% | 0.3782 (36929 lbl) | 3 | 8 |
 
 † V3 fixed-effect / timing IC are quoted from `docs/signal_diagnosis.md` (computed from the V3 score dump); raw IC / IR / quantile L/S / F1 are read from the results JSON. 
 
@@ -67,7 +67,7 @@ Background: `docs/signal_diagnosis.md`. Code commit: `6ef98f8+dirty` (`training/
 | **X3s1 x3_vn_nostatic_seed1** | -0.0057 | 0.0119 | -0.037 | -0.0112 | -0.0006 | 0.0088 | -0.006 | 167 | -0.18% | -0.09% | 0.1370 (33364 lbl) | 0 | 5 |
 | **X2s2 x2_nostatic_seed2** | +0.0152 | 0.0122 | 0.097 | -0.0081 | +0.0133 | 0.0108 | 0.096 | 167 | 0.02% | 0.02% | 0.1539 (33364 lbl) | 0 | 5 |
 | **X3s2 x3_vn_nostatic_seed2** | +0.0291 | 0.0091 | 0.246 | +0.0142 | +0.0103 | 0.0098 | 0.082 | 167 | 0.25% | 0.09% | 0.1370 (33364 lbl) | 0 | 5 |
-| V3wd0 v3_structure_nowd | _pending_ | | | | | | | | | | | | |
+| **V3wd0 v3_structure_nowd** | +0.0307 | 0.0142 | 0.167 | +0.0217 | +0.0180 | 0.0137 | 0.102 | 167 | 0.05% | 0.01% | 0.3835 (33364 lbl) | 3 | 8 |
 
 † V3 fixed-effect / timing IC are quoted from `docs/signal_diagnosis.md` (computed from the V3 score dump); raw IC / IR / quantile L/S / F1 are read from the results JSON. 
 
@@ -83,5 +83,6 @@ Background: `docs/signal_diagnosis.md`. Code commit: `6ef98f8+dirty` (`training/
 - **X3s1 x3_vn_nostatic_seed1**: 0*: timing +0.0195 / raw +0.0029 / vloss 1.0994 / tloss 1.0993; 1: timing -0.0182 / raw -0.0126 / vloss 1.0992 / tloss 1.0989; 2: timing -0.0182 / raw -0.0126 / vloss 1.0989 / tloss 1.0988; 3: timing -0.0181 / raw -0.0126 / vloss 1.0997 / tloss 1.0988; 4: timing -0.0075 / raw -0.0126 / vloss 1.0991 / tloss 1.0987
 - **X2s2 x2_nostatic_seed2**: 0*: timing +0.0145 / raw +0.0030 / vloss 1.1007 / tloss 1.0995; 1: timing -0.0078 / raw +0.0126 / vloss 1.0997 / tloss 1.0991; 2: timing -0.0078 / raw +0.0126 / vloss 1.0989 / tloss 1.0990; 3: timing -0.0078 / raw +0.0126 / vloss 1.0990 / tloss 1.0989; 4: timing -0.0078 / raw +0.0126 / vloss 1.0992 / tloss 1.0989
 - **X3s2 x3_vn_nostatic_seed2**: 0*: timing +0.0073 / raw +0.0080 / vloss 1.0994 / tloss 1.0994; 1: timing -0.0051 / raw +0.0539 / vloss 1.0987 / tloss 1.0989; 2: timing -0.0078 / raw +0.0126 / vloss 1.0981 / tloss 1.0989; 3: timing -0.0078 / raw +0.0126 / vloss 1.0983 / tloss 1.0988; 4: timing -0.0052 / raw +0.0539 / vloss 1.0987 / tloss 1.0987
+- **V3wd0 v3_structure_nowd**: 0: timing +0.0262 / raw +0.0463 / vloss 1.0926 / tloss 1.0832; 1: timing +0.0272 / raw +0.0398 / vloss 1.0984 / tloss 1.0654; 2: timing +0.0219 / raw +0.0388 / vloss 1.1001 / tloss 1.0543; 3*: timing +0.0481 / raw +0.0473 / vloss 1.1076 / tloss 1.0422; 4: timing +0.0400 / raw +0.0405 / vloss 1.1261 / tloss 1.0286; 5: timing +0.0432 / raw +0.0450 / vloss 1.1214 / tloss 1.0124; 6: timing +0.0316 / raw +0.0402 / vloss 1.1278 / tloss 0.9960; 7: timing +0.0335 / raw +0.0497 / vloss 1.1312 / tloss 0.9807
 
 Reading guide: a recipe helps only if its timing IC is clearly positive on val AND OOT (SE ~0.014 val / ~0.018 OOT; differences below ~2 SE are noise). A high raw IC with fixed-effect IC ~ raw IC and timing IC <= 0 means the model still learned only a ticker ranking.
