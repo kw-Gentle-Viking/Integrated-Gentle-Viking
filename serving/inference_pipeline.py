@@ -43,6 +43,7 @@ logger = logging.getLogger(__name__)
 SERVING_DIR = os.path.dirname(os.path.abspath(__file__))
 TICKERS_FILE = os.environ.get("SERVING_TICKERS_FILE", os.path.join(SERVING_DIR, "active_tickers.json"))
 BACKEND_WEBHOOK_URL = os.environ.get("BACKEND_WEBHOOK_URL", "")
+AI_SERVER_API_KEY = os.environ.get("AI_SERVER_API_KEY", "")
 
 
 def load_active_tickers(tickers_file: str = TICKERS_FILE) -> list[str]:
@@ -86,6 +87,9 @@ def run_for_tickers(tickers: list[str], v2_dsn: str, prod_dsn: str, now: datetim
 
 
 def push_results(results: list[dict], webhook_url: str = BACKEND_WEBHOOK_URL) -> bool:
+    """webhook_url은 백엔드 베이스 URL이다(production push_realtime_results.py와 동일 관례) --
+    /ai/realtime 아래로 쳐야 한다. 예전엔 베이스 URL에 그대로 POST해서 백엔드에선 404였고,
+    X-API-Key도 안 보내서(설정돼 있었어도) 웹훅의 verify_api_key에 401이었을 것이다."""
     if not webhook_url:
         logger.info("BACKEND_WEBHOOK_URL 미설정 -> push 스킵")
         return False
@@ -95,7 +99,11 @@ def push_results(results: list[dict], webhook_url: str = BACKEND_WEBHOOK_URL) ->
         "inference_at": datetime.now().isoformat(),
         "results": results,
     }
-    resp = requests.post(webhook_url, json=payload, timeout=15)
+    headers = {}
+    api_key = os.environ.get("AI_SERVER_API_KEY", "")
+    if api_key:
+        headers["X-API-Key"] = api_key
+    resp = requests.post(f"{webhook_url.rstrip('/')}/ai/realtime", json=payload, timeout=15, headers=headers)
     resp.raise_for_status()
     logger.info("push 완료 -> %s (%d건)", resp.status_code, len(results))
     return True

@@ -53,23 +53,63 @@ def test_push_results_skips_when_no_webhook_url():
 
 
 def test_push_results_posts_payload_shape(monkeypatch):
+    # BACKEND_WEBHOOK_URL is the backend's base URL (matches production's push_realtime_results.py);
+    # push_results must hit /ai/realtime under it, exactly like that reference script does -- it used
+    # to POST straight to the base URL, which 404s against the real backend.
     captured = {}
 
     class FakeResp:
         status_code = 200
         def raise_for_status(self): pass
 
-    def fake_post(url, json, timeout):
+    def fake_post(url, json, timeout, headers=None):
         captured["url"] = url
         captured["json"] = json
         captured["timeout"] = timeout
+        captured["headers"] = headers
         return FakeResp()
 
     monkeypatch.setattr(pipeline.requests, "post", fake_post)
     results = [{"ticker": "005930", "pred_label": 0, "pred_str": "매수",
                 "prob_buy": 0.7, "prob_hold": 0.2, "prob_sell": 0.1}]
-    ok = pipeline.push_results(results, webhook_url="http://example.com/webhook")
+    ok = pipeline.push_results(results, webhook_url="http://example.com")
     assert ok is True
-    assert captured["url"] == "http://example.com/webhook"
+    assert captured["url"] == "http://example.com/ai/realtime"
     assert set(captured["json"].keys()) == {"job_id", "user_id", "inference_at", "results"}
     assert captured["json"]["results"] == results
+
+
+def test_push_results_sends_api_key_header_when_configured(monkeypatch):
+    # The backend's /ai/realtime requires X-API-Key (verify_api_key in routes_ai_webhook.py) -- a push
+    # without it 401s. push_results used to send no headers at all.
+    monkeypatch.setenv("AI_SERVER_API_KEY", "test-key-123")
+    captured = {}
+
+    class FakeResp:
+        status_code = 200
+        def raise_for_status(self): pass
+
+    def fake_post(url, json, timeout, headers=None):
+        captured["headers"] = headers
+        return FakeResp()
+
+    monkeypatch.setattr(pipeline.requests, "post", fake_post)
+    pipeline.push_results([{"ticker": "005930"}], webhook_url="http://example.com")
+    assert captured["headers"]["X-API-Key"] == "test-key-123"
+
+
+def test_push_results_omits_api_key_header_when_not_configured(monkeypatch):
+    monkeypatch.delenv("AI_SERVER_API_KEY", raising=False)
+    captured = {}
+
+    class FakeResp:
+        status_code = 200
+        def raise_for_status(self): pass
+
+    def fake_post(url, json, timeout, headers=None):
+        captured["headers"] = headers
+        return FakeResp()
+
+    monkeypatch.setattr(pipeline.requests, "post", fake_post)
+    pipeline.push_results([{"ticker": "005930"}], webhook_url="http://example.com")
+    assert "X-API-Key" not in captured["headers"]
