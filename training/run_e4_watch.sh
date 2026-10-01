@@ -5,7 +5,9 @@
 # checkpoint selection = val timing IC; plus 6 collapse-diagnosis reruns of x2/x3 with weight_decay=0 or a
 # different seed -- x2_nostatic_nowd, x3_vn_nostatic_nowd, x2_nostatic_seed1, x3_vn_nostatic_seed1,
 # x2_nostatic_seed2, x3_vn_nostatic_seed2; plus v3_structure_nowd -- V3's own structure (static ids kept,
-# fixed label) with just weight_decay=0, run last).
+# fixed label) with just weight_decay=0; plus 8 v3_structure_nowd follow-ups (it is the most balanced E4
+# result so far, val AND OOT timing IC both positive): seed1/seed2, label_source=label_vn/cs,
+# weight_decay=1e-4/3e-4, patience=8, dropout=0.30 -- each changes exactly one variable off v3_structure_nowd).
 #
 # Waits until the GPU has been idle, (re)starts the runner, and loops until every recipe in $RECIPES is
 # recorded in training/artifacts/e4_results.json. The runner resumes at EPOCH granularity, so an
@@ -33,7 +35,7 @@
 set -uo pipefail
 
 RESULTS="${RESULTS:-training/artifacts/e4_results.json}"
-RECIPES="${RECIPES:-x1_cslabel x2_cslabel_nostatic x3_vn_nostatic x4_cslabel_vnfeat x2_nostatic_nowd x3_vn_nostatic_nowd x2_nostatic_seed1 x3_vn_nostatic_seed1 x2_nostatic_seed2 x3_vn_nostatic_seed2 v3_structure_nowd}"
+RECIPES="${RECIPES:-x1_cslabel x2_cslabel_nostatic x3_vn_nostatic x4_cslabel_vnfeat x2_nostatic_nowd x3_vn_nostatic_nowd x2_nostatic_seed1 x3_vn_nostatic_seed1 x2_nostatic_seed2 x3_vn_nostatic_seed2 v3_structure_nowd v3_structure_nowd_seed1 v3_structure_nowd_seed2 v3_structure_nowd_vn v3_structure_nowd_cs v3_structure_wd1e4 v3_structure_wd3e4 v3_structure_nowd_patience8 v3_structure_nowd_dropout30}"
 PYTHON="${PYTHON:-/home/user/miniconda3/envs/dl_env/bin/python}"
 WORKTREE="${WORKTREE:-/home/user/AI_Gentle_Viking_RE/.worktrees/ai-model-redesign}"
 CONSECUTIVE_IDLE_CHECKS="${CONSECUTIVE_IDLE_CHECKS:-10}"

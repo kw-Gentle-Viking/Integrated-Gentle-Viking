@@ -43,16 +43,21 @@ ORIGINAL_4 = ["x1_cslabel", "x2_cslabel_nostatic", "x3_vn_nostatic", "x4_cslabel
 COLLAPSE_DIAG_6 = ["x2_nostatic_nowd", "x3_vn_nostatic_nowd", "x2_nostatic_seed1", "x3_vn_nostatic_seed1",
                    "x2_nostatic_seed2", "x3_vn_nostatic_seed2"]
 V3_STRUCTURE_NOWD = ["v3_structure_nowd"]
+V3_STRUCTURE_FOLLOWUPS_8 = ["v3_structure_nowd_seed1", "v3_structure_nowd_seed2", "v3_structure_nowd_vn",
+                            "v3_structure_nowd_cs", "v3_structure_wd1e4", "v3_structure_wd3e4",
+                            "v3_structure_nowd_patience8", "v3_structure_nowd_dropout30"]
 ALL_11 = ORIGINAL_4 + COLLAPSE_DIAG_6 + V3_STRUCTURE_NOWD
+ALL_19 = ALL_11 + V3_STRUCTURE_FOLLOWUPS_8
 
 
 def test_recipe_table_and_order():
-    assert e4.DEFAULT_ORDER == ALL_11                                          # original 4, then the 6 reruns, then V3wd0 last
+    assert e4.DEFAULT_ORDER == ALL_19                 # original 4, then the 6 reruns, then V3wd0, then its 8 follow-ups
     assert e4.DEFAULT_ORDER[4:6] == ["x2_nostatic_nowd", "x3_vn_nostatic_nowd"]        # weight_decay hypothesis first
     assert e4.DEFAULT_ORDER[6:10] == ["x2_nostatic_seed1", "x3_vn_nostatic_seed1", "x2_nostatic_seed2", "x3_vn_nostatic_seed2"]
-    assert e4.DEFAULT_ORDER[10] == "v3_structure_nowd"                         # V3-structure weight_decay control, run last
-    assert set(e4.RECIPES) == set(e4.DEFAULT_ORDER) == set(ALL_11)
-    assert len({e4.RECIPES[n]["tag"] for n in e4.RECIPES}) == 11               # every tag unique, old and new
+    assert e4.DEFAULT_ORDER[10] == "v3_structure_nowd"                         # V3-structure weight_decay control
+    assert e4.DEFAULT_ORDER[11:19] == V3_STRUCTURE_FOLLOWUPS_8                 # seed1 -> seed2 -> vn -> cs -> wd1e4 -> wd3e4 -> patience8 -> dropout30
+    assert set(e4.RECIPES) == set(e4.DEFAULT_ORDER) == set(ALL_19)
+    assert len({e4.RECIPES[n]["tag"] for n in e4.RECIPES}) == 19               # every tag unique, old and new
     r = e4.RECIPES
     assert (r["x1_cslabel"]["label_source"], r["x1_cslabel"]["static_const"], r["x1_cslabel"]["vol_rank"]) == ("cs", False, False)
     assert (r["x2_cslabel_nostatic"]["label_source"], r["x2_cslabel_nostatic"]["static_const"]) == ("cs", True)
@@ -65,6 +70,37 @@ def test_recipe_table_and_order():
     # the original 4 carry no seed/weight_decay override (module defaults apply)
     for n in ORIGINAL_4:
         assert "seed" not in r[n] and "weight_decay" not in r[n]
+
+
+def test_v3_structure_followups_8_each_change_exactly_one_variable_off_v3_structure_nowd():
+    r = e4.RECIPES
+    base = r["v3_structure_nowd"]
+    same_spec_keys = ("static_const", "vol_rank")                            # label_source differs for vn/cs only
+    for n in V3_STRUCTURE_FOLLOWUPS_8:
+        for k in same_spec_keys:
+            assert r[n][k] == base[k], (n, k)
+    # label_source: identical to base except vn/cs
+    for n in set(V3_STRUCTURE_FOLLOWUPS_8) - {"v3_structure_nowd_vn", "v3_structure_nowd_cs"}:
+        assert r[n]["label_source"] == "label", n
+    assert r["v3_structure_nowd_vn"]["label_source"] == "label_vn"
+    assert r["v3_structure_nowd_cs"]["label_source"] == "cs"
+    # weight_decay: 0.0 for every follow-up except the two wd variants
+    for n in set(V3_STRUCTURE_FOLLOWUPS_8) - {"v3_structure_wd1e4", "v3_structure_wd3e4"}:
+        assert r[n]["weight_decay"] == 0.0, n
+    assert r["v3_structure_wd1e4"]["weight_decay"] == pytest.approx(1e-4)
+    assert r["v3_structure_wd3e4"]["weight_decay"] == pytest.approx(3e-4)
+    # seed: only the two seed variants override it
+    assert r["v3_structure_nowd_seed1"]["seed"] == 1 and r["v3_structure_nowd_seed2"]["seed"] == 2
+    for n in set(V3_STRUCTURE_FOLLOWUPS_8) - {"v3_structure_nowd_seed1", "v3_structure_nowd_seed2"}:
+        assert "seed" not in r[n], n
+    # patience: only patience8 overrides it
+    assert r["v3_structure_nowd_patience8"]["patience"] == 8
+    for n in set(V3_STRUCTURE_FOLLOWUPS_8) - {"v3_structure_nowd_patience8"}:
+        assert "patience" not in r[n], n
+    # dropout: only dropout30 overrides it
+    assert r["v3_structure_nowd_dropout30"]["dropout"] == pytest.approx(0.30)
+    for n in set(V3_STRUCTURE_FOLLOWUPS_8) - {"v3_structure_nowd_dropout30"}:
+        assert "dropout" not in r[n], n
 
 
 def test_collapse_diagnosis_recipes_reuse_x2_x3_spec_with_only_seed_or_weight_decay_overridden():
@@ -87,22 +123,46 @@ def test_recipe_opts_common_settings_and_fingerprints_differ():
     base = {"hparams": {"lr": 3e-4, "dropout": 0.17, "state_size": 32}, "batch_size": 8, "seed": 5, "align": "today"}
     for n in e4.RECIPES:
         o = e4.recipe_opts(n, base)
-        assert o["patience"] == 4 and o["select"] == "val_timing_ic" and o["align"] == "today"
+        exp_patience = 8 if n == "v3_structure_nowd_patience8" else 4          # only patience8 overrides it
+        exp_dropout = 0.30 if n == "v3_structure_nowd_dropout30" else 0.17     # only dropout30 overrides it
+        assert o["patience"] == exp_patience and o["select"] == "val_timing_ic" and o["align"] == "today"
+        assert o["hparams"]["dropout"] == pytest.approx(exp_dropout)
     for n in ORIGINAL_4:                                                       # module defaults: wd 1e-3, seed 0
         o = e4.recipe_opts(n, base)
         assert o["hparams"]["weight_decay"] == 1e-3 and o["seed"] == 0
     assert "weight_decay" not in base["hparams"] and base["seed"] == 5          # base not mutated
+    assert base["hparams"]["dropout"] == pytest.approx(0.17)                    # base not mutated by dropout override either
     assert e4.recipe_opts("x1_cslabel", {**base, "state_size_override": 8})["hparams"]["state_size"] == 8
     fps = {n: e4.cheap_fingerprint(n, e4.recipe_opts(n, base)) for n in e4.RECIPES}
-    assert len({json.dumps(f, sort_keys=True) for f in fps.values()}) == 11     # all 11 fingerprints distinct
+    assert len({json.dumps(f, sort_keys=True) for f in fps.values()}) == 19     # all 19 fingerprints distinct
     assert fps["x3_vn_nostatic"]["label_col"] == "label_vn" and fps["x1_cslabel"]["label_col"] == "cs_quantile"
     assert fps["v3_structure_nowd"]["label_col"] == "label"                     # the SAME fixed label as V3 (not cs_quantile)
     assert fps["x4_cslabel_vnfeat"]["e4"]["vol_rank_cols"] == ["volatility_20d", "sector_volatility"]
     assert fps["x2_cslabel_nostatic"]["e4"]["static_const"] is True and fps["x1_cslabel"]["e4"]["static_const"] is False
     assert fps["x1_cslabel"]["selection"] == {"mode": "val_timing_ic", "patience": 4}
+    assert fps["v3_structure_nowd_patience8"]["selection"] == {"mode": "val_timing_ic", "patience": 8}
     assert fps["x1_cslabel"]["preprocessed"] is False
     full = e4.full_fingerprint("x1_cslabel", e4.recipe_opts("x1_cslabel", base), ["a"], [1, 2, 3])
     assert full["columns_hash"] and full["class_weights"] == [1.0, 2.0, 3.0]
+
+
+def test_patience_and_dropout_overrides_change_only_their_own_fingerprint_field():
+    base = {"hparams": {"lr": 3e-4, "dropout": 0.1658, "state_size": 32}, "batch_size": 8, "align": "today"}
+    o_base = e4.recipe_opts("v3_structure_nowd", base)
+    o_p8 = e4.recipe_opts("v3_structure_nowd_patience8", base)
+    o_d30 = e4.recipe_opts("v3_structure_nowd_dropout30", base)
+    assert o_base["patience"] == 4 and o_base["hparams"]["dropout"] == pytest.approx(0.1658)
+    assert o_p8["patience"] == 8 and o_p8["hparams"]["dropout"] == pytest.approx(0.1658)    # dropout untouched
+    assert o_d30["patience"] == 4 and o_d30["hparams"]["dropout"] == pytest.approx(0.30)    # patience untouched
+    fp_base = e4.cheap_fingerprint("v3_structure_nowd", o_base)
+    fp_p8 = e4.cheap_fingerprint("v3_structure_nowd_patience8", o_p8)
+    fp_d30 = e4.cheap_fingerprint("v3_structure_nowd_dropout30", o_d30)
+    assert fp_p8 != fp_base and fp_d30 != fp_base and fp_p8 != fp_d30
+    # same label/static/vol_rank spec as v3_structure_nowd -> identical "e4" section; only hparams/selection differ
+    assert fp_p8["e4"] == fp_base["e4"] == fp_d30["e4"]
+    assert fp_p8["selection"]["patience"] == 8 and fp_base["selection"]["patience"] == fp_d30["selection"]["patience"] == 4
+    assert fp_d30["hparams"]["dropout"] == pytest.approx(0.30)
+    assert fp_p8["hparams"]["dropout"] == pytest.approx(fp_base["hparams"]["dropout"])
 
 
 def test_collapse_diagnosis_recipe_opts_and_fingerprints_differ_only_by_seed_or_weight_decay():
@@ -687,6 +747,147 @@ def test_v3_structure_nowd_end_to_end_dry_run_static_kept_wd_omitted_and_idempot
     assert (tmp_path / "mv.md").read_text() == before_mv
 
 
+def test_patience_and_dropout_overrides_reach_run_training_and_model_construction(tmp_path, monkeypatch, small_min_names):
+    """CPU dry run of v3_structure_nowd plus its patience8 / dropout30 follow-ups: patience must actually reach
+    train.run_training's early_stopping_patience config key, and dropout must actually reach
+    config.build_tft_config's dropout kwarg (i.e. the model), not just sit in the recorded hparams dict. The
+    base recipe (no override) must see the unmodified champion patience/dropout, proving the override is
+    opt-in and does not leak into neighbouring recipes."""
+    _no_budget(monkeypatch)
+    import training.config as config_mod
+    import training.train as train_mod
+
+    patience_seen, dropout_seen = [], []
+    real_run_training = train_mod.run_training
+    real_build_tft_config = config_mod.build_tft_config
+
+    def spy_run_training(config):
+        patience_seen.append(config["early_stopping_patience"])
+        return real_run_training(config)
+
+    def spy_build_tft_config(*a, **k):
+        dropout_seen.append(k["dropout"])
+        return real_build_tft_config(*a, **k)
+    monkeypatch.setattr(train_mod, "run_training", spy_run_training)
+    monkeypatch.setattr(config_mod, "build_tft_config", spy_build_tft_config)
+
+    data = FakeData()
+    data.expected_samples = _expected_counts(data)
+    a = _args(tmp_path, "--recipes", "v3_structure_nowd", "v3_structure_nowd_patience8",
+              "v3_structure_nowd_dropout30", "--epochs", "1")
+    assert e4.main(a, data=data) == 0
+    assert patience_seen == [4, 8, 4]                                          # base, patience8, dropout30(unchanged)
+    assert dropout_seen[0] == pytest.approx(dropout_seen[1])                   # base vs patience8: same (champion) dropout
+    assert dropout_seen[2] == pytest.approx(0.30)                              # dropout30 recipe: overridden
+
+    res = json.load(open(tmp_path / "art" / "e4_results.json"))
+    assert res["v3_structure_nowd"]["patience"] == 4
+    assert res["v3_structure_nowd_patience8"]["patience"] == 8
+    assert res["v3_structure_nowd_patience8"]["hparams"]["dropout"] == pytest.approx(res["v3_structure_nowd"]["hparams"]["dropout"])
+    assert res["v3_structure_nowd_dropout30"]["patience"] == 4
+    assert res["v3_structure_nowd_dropout30"]["hparams"]["dropout"] == pytest.approx(0.30)
+    assert res["v3_structure_nowd_dropout30"]["hparams"]["dropout"] != pytest.approx(res["v3_structure_nowd"]["hparams"]["dropout"])
+
+
+def test_eight_v3_structure_followups_end_to_end_dry_run_idempotent_no_collision(tmp_path, monkeypatch, small_min_names):
+    """CPU dry run of all 8 v3_structure_nowd follow-ups: static ids must stay AS-IS (static_const=False, unlike
+    x2/x3) for every one of them, label_source must route to the right column (label / label_vn / cs), seed must
+    reach torch.manual_seed, weight_decay must reach torch.optim.Adam exactly as train.py's falsy-omits
+    convention dictates, a second invocation must retrain nothing (idempotent skip), and running v3_structure_nowd
+    itself afterwards must not collide with or overwrite any of the 8 (all fingerprints distinct)."""
+    _no_budget(monkeypatch)
+    import torch
+    import training.train as train_mod
+
+    seeds_seen = []
+    real_manual_seed = torch.manual_seed
+
+    def spy_manual_seed(s):
+        seeds_seen.append(s)
+        return real_manual_seed(s)
+    monkeypatch.setattr(torch, "manual_seed", spy_manual_seed)
+
+    adam_kwargs = []
+    real_adam_init = torch.optim.Adam.__init__
+
+    def spy_adam_init(self, params, **kw):
+        adam_kwargs.append(kw)
+        return real_adam_init(self, params, **kw)
+    monkeypatch.setattr(torch.optim.Adam, "__init__", spy_adam_init)
+
+    static_vals = []
+    real_train_one_epoch = train_mod.train_one_epoch
+
+    def spy_train_one_epoch(model, loader, *a, **k):
+        b = next(iter(loader))
+        static_vals.append(b["static_feats_categorical"].unique().tolist())
+        return real_train_one_epoch(model, loader, *a, **k)
+    monkeypatch.setattr(train_mod, "train_one_epoch", spy_train_one_epoch)
+
+    data = FakeData()
+    data.expected_samples = _expected_counts(data)
+    new8 = list(V3_STRUCTURE_FOLLOWUPS_8)
+    a = _args(tmp_path, "--recipes", *new8, "--epochs", "1")
+    assert e4.main(a, data=data) == 0
+
+    res = json.load(open(tmp_path / "art" / "e4_results.json"))
+    assert set(res) == set(new8)
+    for i, n in enumerate(new8):
+        assert res[n]["static_const"] is False
+        assert static_vals[i] != [0]                                          # static ids kept, never forced to 0
+
+    exp_label = {"v3_structure_nowd_seed1": "label", "v3_structure_nowd_seed2": "label",
+                 "v3_structure_nowd_vn": "label_vn", "v3_structure_nowd_cs": "cs",
+                 "v3_structure_wd1e4": "label", "v3_structure_wd3e4": "label",
+                 "v3_structure_nowd_patience8": "label", "v3_structure_nowd_dropout30": "label"}
+    for n, lab in exp_label.items():
+        assert res[n]["label_source"] == lab, n
+
+    exp_wd = {"v3_structure_nowd_seed1": 0.0, "v3_structure_nowd_seed2": 0.0, "v3_structure_nowd_vn": 0.0,
+              "v3_structure_nowd_cs": 0.0, "v3_structure_wd1e4": 1e-4, "v3_structure_wd3e4": 3e-4,
+              "v3_structure_nowd_patience8": 0.0, "v3_structure_nowd_dropout30": 0.0}
+    for n, wd in exp_wd.items():
+        assert res[n]["hparams"]["weight_decay"] == pytest.approx(wd), n
+
+    # one torch.optim.Adam init per recipe (epochs=1, no resume) -- wd=0 is falsy -> opt_kwargs omits it entirely
+    for i, n in enumerate(new8):
+        if exp_wd[n] == 0.0:
+            assert "weight_decay" not in adam_kwargs[i], n
+        else:
+            assert adam_kwargs[i]["weight_decay"] == pytest.approx(exp_wd[n]), n
+
+    assert res["v3_structure_nowd_seed1"]["seed"] == 1 and res["v3_structure_nowd_seed2"]["seed"] == 2
+    for n in set(new8) - {"v3_structure_nowd_seed1", "v3_structure_nowd_seed2"}:
+        assert res[n]["seed"] == 0, n
+    assert res["v3_structure_nowd_patience8"]["patience"] == 8
+    for n in set(new8) - {"v3_structure_nowd_patience8"}:
+        assert res[n]["patience"] == 4, n
+    assert res["v3_structure_nowd_dropout30"]["hparams"]["dropout"] == pytest.approx(0.30)
+
+    # idempotent: a second invocation retrains nothing and leaves the results file byte-identical
+    before = (tmp_path / "art" / "e4_results.json").read_text()
+    calls = {"n": 0}
+    monkeypatch.setattr(train_mod, "train_one_epoch",
+                        lambda *x, **k: (calls.__setitem__("n", calls["n"] + 1), real_train_one_epoch(*x, **k))[1])
+    assert e4.main(a, data=data) == 0
+    assert calls["n"] == 0
+    assert (tmp_path / "art" / "e4_results.json").read_text() == before
+
+    # running v3_structure_nowd afterwards adds one more key, none of the 8 are touched, overwritten, or collide
+    a2 = _args(tmp_path, "--recipes", "v3_structure_nowd", "--epochs", "1")
+    assert e4.main(a2, data=data) == 0
+    res2 = json.load(open(tmp_path / "art" / "e4_results.json"))
+    assert set(res2) == set(new8) | {"v3_structure_nowd"}
+    for n in new8:
+        assert res2[n] == res[n]                                              # untouched by the parent run
+    fps = {n: json.dumps(res2[n]["fingerprint"], sort_keys=True) for n in res2}
+    assert len(set(fps.values())) == len(fps)                                 # every fingerprint distinct, no collisions
+
+    doc = (tmp_path / "doc.md").read_text()
+    for n in new8:
+        assert n in doc and e4.RECIPES[n]["tag"] in doc
+
+
 def test_oot_never_scored_per_epoch(tmp_path, monkeypatch, small_min_names):
     _no_budget(monkeypatch)
     windows = []
@@ -736,6 +937,12 @@ def test_render_doc_baseline_row_and_empty_states():
     for n in COLLAPSE_DIAG_6:                                                   # pending rows for all 6 new recipes too
         assert n in md
     assert "v3_structure_nowd" in md and "V3wd0" in md
+    for n in V3_STRUCTURE_FOLLOWUPS_8:                                         # pending rows for the 8 follow-ups too
+        assert n in md and e4.RECIPES[n]["tag"] in md
+    # weight_decay/patience/dropout overrides are visible in the table's description cell when non-default
+    assert "weight_decay=1e-4" in md and "weight_decay=3e-4" in md
+    assert "patience=8" in md
+    assert "dropout=0.30" in md
     # the recipe-table row's label cell must say it's V3's fixed label, NOT be mislabeled "label_vn" (the old
     # two-way "cs" vs "label_vn" ternary would have silently mislabeled any non-cs, non-label_vn recipe).
     row = next(l for l in md.splitlines() if l.startswith("| v3_structure_nowd |"))

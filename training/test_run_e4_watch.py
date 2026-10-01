@@ -28,18 +28,23 @@ TEN_RECIPES = ["x1_cslabel", "x2_cslabel_nostatic", "x3_vn_nostatic", "x4_cslabe
                "x3_vn_nostatic_nowd", "x2_nostatic_seed1", "x3_vn_nostatic_seed1", "x2_nostatic_seed2",
                "x3_vn_nostatic_seed2"]
 ELEVEN_RECIPES = TEN_RECIPES + ["v3_structure_nowd"]
+V3_STRUCTURE_FOLLOWUPS_8 = ["v3_structure_nowd_seed1", "v3_structure_nowd_seed2", "v3_structure_nowd_vn",
+                            "v3_structure_nowd_cs", "v3_structure_wd1e4", "v3_structure_wd3e4",
+                            "v3_structure_nowd_patience8", "v3_structure_nowd_dropout30"]
+NINETEEN_RECIPES = ELEVEN_RECIPES + V3_STRUCTURE_FOLLOWUPS_8
 
 
-def test_done_check_default_recipes_covers_all_eleven(tmp_path):
-    """e4_done with NO $RECIPES override (the watcher's own default) must require all 11 recipes, including the
-    6 collapse-diagnosis reruns and the v3_structure_nowd weight_decay control, not just the original 4."""
+def test_done_check_default_recipes_covers_all_nineteen(tmp_path):
+    """e4_done with NO $RECIPES override (the watcher's own default) must require all 19 recipes, including the
+    6 collapse-diagnosis reruns, the v3_structure_nowd weight_decay control, and its 8 follow-ups (seed1/seed2,
+    label_vn/cs, weight_decay=1e-4/3e-4, patience=8, dropout=0.30) -- not just the original 4 or the first 11."""
     p = tmp_path / "res.json"
     env = {k: v for k, v in os.environ.items() if k != "RECIPES"}
     env["RESULTS"] = str(p)
-    p.write_text(json.dumps({n: {} for n in ELEVEN_RECIPES if n != "v3_structure_nowd"}))
+    p.write_text(json.dumps({n: {} for n in NINETEEN_RECIPES if n != "v3_structure_nowd_dropout30"}))
     r = subprocess.run(["bash", "-c", f'source "{SCRIPT}"; e4_done'], env=env)
-    assert r.returncode != 0                                                   # v3_structure_nowd still missing
-    p.write_text(json.dumps({n: {} for n in ELEVEN_RECIPES}))
+    assert r.returncode != 0                                          # v3_structure_nowd_dropout30 still missing
+    p.write_text(json.dumps({n: {} for n in NINETEEN_RECIPES}))
     r = subprocess.run(["bash", "-c", f'source "{SCRIPT}"; e4_done'], env=env)
     assert r.returncode == 0
 
@@ -89,11 +94,11 @@ def _run_watcher(tmp_path, py_body, extra_env=None, nvsmi=NVSMI_OK):
 
 
 ALL_4_JSON = '{"x1_cslabel":{},"x2_cslabel_nostatic":{},"x3_vn_nostatic":{},"x4_cslabel_vnfeat":{}}'
-ALL_11_JSON = '{' + ','.join(f'"{n}":{{}}' for n in ELEVEN_RECIPES) + '}'       # matches the watcher's default $RECIPES
+ALL_19_JSON = '{' + ','.join(f'"{n}":{{}}' for n in NINETEEN_RECIPES) + '}'      # matches the watcher's default $RECIPES
 
 
 def test_watcher_completes_when_runner_records_all_recipes(tmp_path):
-    body = f'echo \'{ALL_11_JSON}\' > "$RESULTS"\nexit 0\n'
+    body = f'echo \'{ALL_19_JSON}\' > "$RESULTS"\nexit 0\n'
     r, _ = _run_watcher(tmp_path, body)
     assert r.returncode == 0 and "e4 experiments COMPLETE" in r.stdout
     assert "utilization=0% x3" in r.stdout
@@ -108,7 +113,7 @@ def test_watcher_cools_down_and_resumes_after_signal_kill(tmp_path):
     counter = tmp_path / "count"
     body = (f'n=$(cat "{counter}" 2>/dev/null || echo 0); echo $((n+1)) > "{counter}"\n'
             'if [ "$n" -eq 0 ]; then exit 143; fi\n'
-            f'echo \'{ALL_11_JSON}\' > "$RESULTS"\nexit 0\n')
+            f'echo \'{ALL_19_JSON}\' > "$RESULTS"\nexit 0\n')
     r, _ = _run_watcher(tmp_path, body)
     assert r.returncode == 0 and "Killed by user signal (rc=143)" in r.stdout and "COMPLETE" in r.stdout
     assert "Quick failure" not in r.stdout
@@ -175,7 +180,5 @@ def test_sigint_130_is_a_user_kill(tmp_path):
 def test_default_recipe_list_and_results_file_and_runner():
     r = subprocess.run(["bash", "-c", f'source "{SCRIPT}"; echo "$RECIPES|$RESULTS"'], capture_output=True, text=True,
                        timeout=20, env={k: v for k, v in os.environ.items() if k not in ("RECIPES", "RESULTS")})
-    assert r.stdout.strip() == ("x1_cslabel x2_cslabel_nostatic x3_vn_nostatic x4_cslabel_vnfeat "
-                                "x2_nostatic_nowd x3_vn_nostatic_nowd x2_nostatic_seed1 x3_vn_nostatic_seed1 "
-                                "x2_nostatic_seed2 x3_vn_nostatic_seed2 v3_structure_nowd|training/artifacts/e4_results.json")
+    assert r.stdout.strip() == (" ".join(NINETEEN_RECIPES) + "|training/artifacts/e4_results.json")
     assert "run_e4_experiments.py" in open(SCRIPT).read() and "run_tfx_experiments" not in open(SCRIPT).read()

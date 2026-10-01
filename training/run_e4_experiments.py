@@ -51,6 +51,27 @@ V3 (e2e3 `v3_wd`: label_source="label" i.e. the same fixed-threshold `label` col
 vol_rank=False, same champion hparams) with weight_decay=0 instead of 1e-3 -- the single-variable control that
 isolates the weight_decay fix from the static-id change.
 
+v3_structure_nowd follow-ups (run last, after v3_structure_nowd): it is the most balanced E4 result so far -- val
+timing IC +0.048, OOT timing IC +0.018, BOTH positive and same-signed (every earlier recipe either had val/OOT
+disagree or was never retried with static ids kept + weight_decay=0). best_epoch=3, last_epoch=7 (patience=4
+early-stopped it). Eight recipes each change exactly ONE variable off v3_structure_nowd, everything else
+(static_const=False, champion hparams otherwise) held fixed:
+  v3_structure_nowd_seed1/_seed2      seed=1 / seed=2 -- is the result seed-independent?
+  v3_structure_nowd_vn                label_source="label_vn" -- label_vn combined with static-ids-kept + wd=0,
+                                       for the first time.
+  v3_structure_nowd_cs                label_source="cs" -- the cross-sectional quantile label combined with
+                                       static-ids-kept + wd=0, for the first time.
+  v3_structure_wd1e4 / _wd3e4         weight_decay=1e-4 / 3e-4 instead of 0 -- a small Adam L2 between 0 and V3's
+                                       1e-3.
+  v3_structure_nowd_patience8         patience=8 instead of 4 -- v3_structure_nowd stopped at last_epoch=7 under
+                                       patience=4; does it keep improving with more room?
+  v3_structure_nowd_dropout30         dropout=0.30 instead of the champion default (~0.1658) -- more regularization.
+Run order (seed check first -- cheapest confirmation it is not a fluke -- then the never-tried label
+combinations, then fine-tuning): seed1 -> seed2 -> vn -> cs -> wd1e4 -> wd3e4 -> patience8 -> dropout30 (see
+DEFAULT_ORDER). `patience` and `dropout` are new optional per-recipe overrides read by `recipe_opts`, the same
+pattern as the existing `weight_decay`/`seed` overrides; a recipe that does not set them gets the module defaults
+(PATIENCE=4, champion dropout) unchanged, so the original 11 recipes' fingerprints and behavior are unaffected.
+
     set -a && source .env && set +a
     PYTHONPATH=. python training/run_e4_experiments.py [--recipes x1_cslabel x2_cslabel_nostatic] [--max-minutes 600]
 
@@ -140,12 +161,55 @@ RECIPES = {
     "v3_structure_nowd": dict(tag="V3wd0", label_source="label", static_const=False, vol_rank=False, weight_decay=0.0,
                               desc="V3(e2e3 v3_wd)와 라벨/정적변수/하이퍼파라미터 전부 동일, weight_decay만 0 -- "
                                    "does the wd=0 fix help timing IC with static ids (and the V3 label) left alone?"),
+    # v3_structure_nowd follow-ups: it is the most balanced E4 result so far (val timing IC +0.048, OOT +0.018,
+    # both positive and same-signed -- every other recipe either had val/OOT disagree or was never retried with
+    # static ids kept + weight_decay=0). These 8 each change exactly ONE variable off v3_structure_nowd (seed,
+    # label_source, weight_decay, patience, dropout); every other setting (static_const=False, champion hparams)
+    # is identical to v3_structure_nowd. patience/dropout use the recipe_opts `patience`/`dropout` overrides
+    # (same optional-override pattern as weight_decay/seed; unset -> the module defaults PATIENCE / champion
+    # dropout, so the original 11 recipes are byte-identical in fingerprint and behavior).
+    "v3_structure_nowd_seed1": dict(tag="V3wd0s1", label_source="label", static_const=False, vol_rank=False,
+                                    weight_decay=0.0, seed=1,
+                                    desc="v3_structure_nowd, seed=1 -- is the balanced val/OOT timing-IC result seed-independent?"),
+    "v3_structure_nowd_seed2": dict(tag="V3wd0s2", label_source="label", static_const=False, vol_rank=False,
+                                    weight_decay=0.0, seed=2,
+                                    desc="v3_structure_nowd, seed=2 -- is the balanced val/OOT timing-IC result seed-independent?"),
+    "v3_structure_nowd_vn": dict(tag="V3wd0vn", label_source="label_vn", static_const=False, vol_rank=False,
+                                 weight_decay=0.0,
+                                 desc="v3_structure_nowd + label_source=label_vn -- first test of label_vn together with "
+                                      "static ids kept and weight_decay=0"),
+    "v3_structure_nowd_cs": dict(tag="V3wd0cs", label_source="cs", static_const=False, vol_rank=False,
+                                 weight_decay=0.0,
+                                 desc="v3_structure_nowd + label_source=cs (cross-sectional quantile) -- first test of the "
+                                      "cs label together with static ids kept and weight_decay=0"),
+    "v3_structure_wd1e4": dict(tag="V3wd1e4", label_source="label", static_const=False, vol_rank=False,
+                               weight_decay=0.0001,
+                               desc="v3_structure_nowd with weight_decay=1e-4 instead of 0 -- a small Adam L2 between 0 "
+                                    "and V3's 1e-3"),
+    "v3_structure_wd3e4": dict(tag="V3wd3e4", label_source="label", static_const=False, vol_rank=False,
+                               weight_decay=0.0003,
+                               desc="v3_structure_nowd with weight_decay=3e-4 instead of 0"),
+    "v3_structure_nowd_patience8": dict(tag="V3wd0p8", label_source="label", static_const=False, vol_rank=False,
+                                        weight_decay=0.0, patience=8,
+                                        desc="v3_structure_nowd with patience=8 instead of 4 -- best_epoch=3/last_epoch=7 "
+                                             "stopped early under patience=4; does it still improve given more room?"),
+    "v3_structure_nowd_dropout30": dict(tag="V3wd0d30", label_source="label", static_const=False, vol_rank=False,
+                                        weight_decay=0.0, dropout=0.30,
+                                        desc="v3_structure_nowd with dropout=0.30 instead of the champion default "
+                                             "(~0.1658) -- more regularization"),
 }
 DEFAULT_ORDER = ["x1_cslabel", "x2_cslabel_nostatic", "x3_vn_nostatic", "x4_cslabel_vnfeat",
                   # weight_decay hypothesis checked first (cheaper to falsify), then the seed reruns.
                   "x2_nostatic_nowd", "x3_vn_nostatic_nowd",
                   "x2_nostatic_seed1", "x3_vn_nostatic_seed1", "x2_nostatic_seed2", "x3_vn_nostatic_seed2",
-                  "v3_structure_nowd"]
+                  "v3_structure_nowd",
+                  # v3_structure_nowd follow-ups: seeds first (cheapest confirmation it's not a fluke), then the
+                  # label combinations never tried with this structure, then fine-tuning (weight_decay, patience,
+                  # dropout).
+                  "v3_structure_nowd_seed1", "v3_structure_nowd_seed2",
+                  "v3_structure_nowd_vn", "v3_structure_nowd_cs",
+                  "v3_structure_wd1e4", "v3_structure_wd3e4",
+                  "v3_structure_nowd_patience8", "v3_structure_nowd_dropout30"]
 
 
 # --------------------------------------------------------------------------------------------
@@ -153,14 +217,20 @@ DEFAULT_ORDER = ["x1_cslabel", "x2_cslabel_nostatic", "x3_vn_nostatic", "x4_csla
 # --------------------------------------------------------------------------------------------
 def recipe_opts(name: str, base: dict) -> dict:
     """Per-recipe opts: champion hparams + weight_decay 1e-3, seed 0, patience 4, val-timing-IC selection --
-    unless the recipe's own RECIPES entry overrides `weight_decay` and/or `seed` (the collapse-diagnosis
-    reruns of x2/x3 do). `--state-size` (dry run) always wins over the champion state size."""
+    unless the recipe's own RECIPES entry overrides `weight_decay`, `seed`, `patience` and/or `dropout` (the
+    collapse-diagnosis reruns of x2/x3 override weight_decay/seed; the v3_structure_nowd follow-ups also use the
+    patience/dropout overrides). A recipe with none of these keys gets the exact module defaults, unchanged.
+    `--state-size` (dry run) always wins over the champion state size (and over any `dropout` override, a
+    different hp key)."""
     spec = RECIPES[name]
     hp = {**base["hparams"], "weight_decay": spec.get("weight_decay", WEIGHT_DECAY)}
+    if "dropout" in spec:
+        hp["dropout"] = spec["dropout"]
     if base.get("state_size_override"):
         hp["state_size"] = base["state_size_override"]
     seed = spec.get("seed", SEED)
-    return {**base, "hparams": hp, "seed": seed, "patience": PATIENCE, "select": SELECT_KEY, "align": "today"}
+    patience = spec.get("patience", PATIENCE)
+    return {**base, "hparams": hp, "seed": seed, "patience": patience, "select": SELECT_KEY, "align": "today"}
 
 
 def label_col_of(name: str) -> str:
@@ -637,7 +707,8 @@ def parse_args(argv=None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--recipes", nargs="+", default=list(DEFAULT_ORDER), choices=list(RECIPES),
                    help="run order = the order given (default: x1 -> x2 -> x3 -> x4 -> "
-                        "x2_nostatic_nowd -> x3_vn_nostatic_nowd -> x2/x3_..._seed1 -> x2/x3_..._seed2)")
+                        "x2_nostatic_nowd -> x3_vn_nostatic_nowd -> x2/x3_..._seed1 -> x2/x3_..._seed2 -> "
+                        "v3_structure_nowd -> seed1 -> seed2 -> vn -> cs -> wd1e4 -> wd3e4 -> patience8 -> dropout30)")
     p.add_argument("--max-minutes", type=float, default=600.0)
     p.add_argument("--artifacts-dir", default=None,
                    help=f"checkpoints + results JSON (default {ARTIFACTS_DIR}; REQUIRED with --max-tickers)")
