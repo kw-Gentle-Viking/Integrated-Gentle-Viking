@@ -37,6 +37,28 @@ def is_stale(trade_datetime, now=None, max_age_min=None) -> bool:
     return (now - ts).total_seconds() > max_age * 60
 
 
+REPORT_FIELDS = ("report", "analysis", "interpretability")
+
+
+def merge_realtime_prediction(old: dict | None, new: dict) -> dict:
+    """5분 자동 push(new)는 report/analysis/interpretability 를 안 보낸다(ONCE 콜백에만 있다). 그래서
+    push 가 그대로 덮어쓰면 ONCE 리포트가 다음 push 한 번에 사라졌다 -- new 에 없는 report류 필드는
+    old 값을 보존한다. new 가 명시적으로 값을 들고 있으면(ONCE 콜백 자신의 push) 그걸 우선한다."""
+    if old is None:
+        return new
+    merged = dict(new)
+    for key in REPORT_FIELDS:
+        if key not in merged and key in old:
+            merged[key] = old[key]
+    return merged
+
+
+def with_staleness(pred: dict, now=None) -> dict:
+    """조회 API(GET /ai/predictions*)에도 is_stale() 과 같은 기준으로 `stale` 플래그를 붙인다.
+    기존엔 자동매매 판단 경로(AIClient.predict)에만 있어서 조회 결과는 오래된 예측도 '최신'처럼 보였다."""
+    return {**pred, "stale": is_stale(pred.get("trade_datetime"), now=now)}
+
+
 class AIClient:
     """AI 서버 클라이언트"""
 

@@ -54,3 +54,25 @@ def test_frontend_redirect_url_preserves_existing_query_and_encodes_values():
     url = frontend_redirect_url("https://f/cb?x=1", "a b", "c&d")
     q = parse_qs(urlparse(url).query)
     assert q["x"] == ["1"] and q["access_token"] == ["a b"] and q["refresh_token"] == ["c&d"]
+
+
+# ---- 백테스트 전략 로더/스키마 결함 ----
+def test_backtest_service_loads_all_advertised_strategies():
+    # /backtest/strategies 가 보여주는 aggressive/balanced/conservative/ultra_safe 가 실제로는
+    # _load_strategy 에 없어서 고르면 400 "Unknown strategy" 였다.
+    from backtest.service import BacktestService
+    svc = BacktestService()
+    for name in ("aggressive", "balanced", "conservative", "ultra_safe", "ai_signal", "ma_cross", "rsi_reversal"):
+        strat = svc._load_strategy(name, "005930")
+        assert strat is not None and strat.symbol == "005930"
+
+
+def test_backtest_response_accepts_total_trades():
+    # service.py 는 BacktestResponse(..., total_trades=len(bt.trades)) 로 생성하는데 스키마에 필드가
+    # 없어서 db.py의 save_to_clickhouse 가 result.total_trades 를 읽다 AttributeError -> 조용히 삼켜짐
+    # (이력 저장이 매번 조용히 실패했을 것).
+    from backtest.schemas import BacktestResponse
+    r = BacktestResponse(cumulative=0.1, sharpe=1.0, volatility=0.1, max_drawdown=-0.1, calmar=1.0,
+                         symbol="005930", strategy="ai_signal", start_date="2024-01-01", end_date="2024-01-31",
+                         initial_capital=10_000_000, final_equity=10_500_000, total_trades=7)
+    assert r.total_trades == 7

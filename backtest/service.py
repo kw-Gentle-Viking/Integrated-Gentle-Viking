@@ -9,6 +9,10 @@ from backtest.engine.backtester import Backtester, performance_from_curve
 from backtest.engine.execution import ExecutionModel, CostModelCfg
 from backtest.engine.risk import RiskManager, RiskLimits
 from backtest.strategies.ma_cross import MACrossStrategy
+from backtest.strategies.aggressive import AggressiveStrategy
+from backtest.strategies.balanced import BalancedStrategy
+from backtest.strategies.conservative import ConservativeStrategy
+from backtest.strategies.ultra_safe import UltraSafeStrategy
 from backtest.strategies.rsi_reversal import RSIReversalStrategy
 from backtest.strategies.ai_signal import AISignalStrategy
 
@@ -155,6 +159,11 @@ class BacktestService:
             "ma_cross": MACrossStrategy,
             "rsi_reversal": RSIReversalStrategy,
             "ai_signal": AISignalStrategy,
+            # /backtest/strategies 가 광고하는 4종 -- 예전엔 여기 없어서 고르면 400 "Unknown strategy" 였다
+            "aggressive": AggressiveStrategy,
+            "balanced": BalancedStrategy,
+            "conservative": ConservativeStrategy,
+            "ultra_safe": UltraSafeStrategy,
         }
 
         strategy_cls = strategies.get(strategy_name)

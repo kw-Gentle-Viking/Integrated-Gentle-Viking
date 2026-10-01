@@ -9,6 +9,7 @@ from app.dependencies import get_current_user
 from app.models import LiveCandle, User
 from app.schemas import AgreementAnalysisRequest, OnceCallbackPayload, PredictionResult, RealtimePayload, WarmupPayload
 from app.services_report import generate_agreement_analysis, generate_report, save_report
+from app.ai_client import merge_realtime_prediction, with_staleness
 from app.shared_state import SIGNAL_MAP, ai_signal_event, realtime_predictions, warmup_events, warmup_received, warmup_requirements
 
 router = APIRouter()
@@ -100,7 +101,9 @@ def receive_realtime(
     parsed_all = []
     for result in payload.results:
         parsed = parse_prediction(result)
-        realtime_predictions[result.ticker] = parsed
+        # 5분 push는 report/analysis/interpretability가 없다 -- ONCE 콜백이 채워둔 값을 지우지 않는다.
+        realtime_predictions[result.ticker] = merge_realtime_prediction(
+            realtime_predictions.get(result.ticker), parsed)
         parsed_all.append(parsed)
         print(
             f" {result.ticker}: {parsed['signal']} "
@@ -162,7 +165,7 @@ def receive_once_callback(
 def get_predictions():
     """전체 종목 최신 추론 결과 조회"""
     if realtime_predictions:
-        return realtime_predictions
+        return {ticker: with_staleness(pred) for ticker, pred in realtime_predictions.items()}
     if os.getenv("LOCAL_DEMO_MODE") == "1":
         return {
             ticker: build_demo_prediction(ticker)
@@ -189,7 +192,7 @@ def get_prediction(ticker: str):
                     pred.get("prob_sell", 0),
                 ),
             }
-        return pred
+        return with_staleness(pred)
     if os.getenv("LOCAL_DEMO_MODE") == "1":
         return build_demo_prediction(ticker)
     raise HTTPException(status_code=404, detail="추론 결과 없음")

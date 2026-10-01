@@ -58,3 +58,38 @@ def test_predict_passes_through_fresh_prediction(monkeypatch):
     monkeypatch.setenv("AI_PRED_MAX_AGE_MIN", "30")
     out = ac.AIClient().predict("000660")
     assert out["signal"] == "BUY" and out["confidence"] == 0.9 and not out.get("stale")
+
+
+# ---- 5분 push가 ONCE 리포트를 지우는 문제 / 조회 API에 신선도 미표시 ----
+def test_merge_realtime_prediction_preserves_existing_report_fields():
+    from app.ai_client import merge_realtime_prediction
+    old = {"ticker": "005930", "signal": "BUY", "confidence": 0.8, "report": "보고서", "analysis": "분석",
+          "interpretability": {"top_features": ["a"]}}
+    new = {"ticker": "005930", "signal": "HOLD", "confidence": 0.5}   # 5분 push 는 report류 필드를 안 보낸다
+    merged = merge_realtime_prediction(old, new)
+    assert merged["signal"] == "HOLD" and merged["confidence"] == 0.5          # 새 신호/확신도는 갱신
+    assert merged["report"] == "보고서" and merged["analysis"] == "분석"        # 리포트는 보존
+    assert merged["interpretability"] == {"top_features": ["a"]}
+
+
+def test_merge_realtime_prediction_lets_new_report_override_when_present():
+    from app.ai_client import merge_realtime_prediction
+    old = {"ticker": "005930", "report": "옛 보고서"}
+    new = {"ticker": "005930", "signal": "BUY", "report": "새 보고서"}
+    assert merge_realtime_prediction(old, new)["report"] == "새 보고서"
+
+
+def test_merge_realtime_prediction_with_no_prior_value_is_just_new():
+    from app.ai_client import merge_realtime_prediction
+    new = {"ticker": "000660", "signal": "SELL"}
+    assert merge_realtime_prediction(None, new) == new
+
+
+def test_with_staleness_adds_stale_flag_using_trade_datetime():
+    from app.ai_client import with_staleness
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+    now = datetime(2026, 9, 28, 10, 30, tzinfo=ZoneInfo("Asia/Seoul"))
+    fresh = with_staleness({"trade_datetime": "2026-09-28T10:20:00"}, now=now)
+    stale = with_staleness({"trade_datetime": "2026-09-28T09:00:00"}, now=now)
+    assert fresh["stale"] is False and stale["stale"] is True

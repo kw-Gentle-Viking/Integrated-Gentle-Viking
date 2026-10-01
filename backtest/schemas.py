@@ -49,6 +49,7 @@ class BacktestResponse(BaseModel):
     end_date: str
     initial_capital: int
     final_equity: int
+    total_trades: int = 0
 
     # 상세 데이터 (선택)
     equity_curve: Optional[List[Dict[str, Any]]] = None
