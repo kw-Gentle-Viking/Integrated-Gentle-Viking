@@ -438,7 +438,17 @@ function PredictContent() {
                   <p className="text-xs font-black uppercase text-[#5267ff]">Inference Insight</p>
                   <h2 className="mt-1 text-2xl font-black text-slate-950">추론 결과 분석 리포트</h2>
                 </div>
-                <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-black text-emerald-700">실제 응답</span>
+                {/* modelVersion은 AI 서버가 실제로 이 종목을 push했을 때만 내려온다 -- 종목이 AI
+                   유니버스(코스피 200종목) 밖이면 백엔드가 confidence 0 HOLD(또는 설정에 따라 무작위
+                   신호)로 채워 보내는데, 이 배지가 조건 없이 항상 "실제 응답"이라 둘을 구분할 수
+                   없었다(2026-10-02 통합 감사). */}
+                {result.modelVersion ? (
+                  <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-black text-emerald-700">실제 응답</span>
+                ) : (
+                  <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-black text-amber-700">
+                    AI 미응답 (해당 종목 추론 결과 없음)
+                  </span>
+                )}
               </div>
 
               <div className="text-base font-normal text-slate-950">
