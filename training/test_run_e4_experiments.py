@@ -47,20 +47,23 @@ V3_STRUCTURE_FOLLOWUPS_8 = ["v3_structure_nowd_seed1", "v3_structure_nowd_seed2"
                             "v3_structure_nowd_cs", "v3_structure_wd1e4", "v3_structure_wd3e4",
                             "v3_structure_nowd_patience8", "v3_structure_nowd_dropout30"]
 VN_SEED_CONFIRM_2 = ["v3_structure_nowd_vn_seed1", "v3_structure_nowd_vn_seed2"]
+CS_SEED_CONFIRM_2 = ["v3_structure_nowd_cs_seed1", "v3_structure_nowd_cs_seed2"]
 ALL_11 = ORIGINAL_4 + COLLAPSE_DIAG_6 + V3_STRUCTURE_NOWD
 ALL_19 = ALL_11 + V3_STRUCTURE_FOLLOWUPS_8
 ALL_21 = ALL_19 + VN_SEED_CONFIRM_2
+ALL_23 = ALL_21 + CS_SEED_CONFIRM_2
 
 
 def test_recipe_table_and_order():
-    assert e4.DEFAULT_ORDER == ALL_21                 # original 4, then the 6 reruns, then V3wd0, its 8 follow-ups, then 2 vn seed-confirms
+    assert e4.DEFAULT_ORDER == ALL_23                 # original 4, then the 6 reruns, then V3wd0, its 8 follow-ups, then 2 vn + 2 cs seed-confirms
     assert e4.DEFAULT_ORDER[4:6] == ["x2_nostatic_nowd", "x3_vn_nostatic_nowd"]        # weight_decay hypothesis first
     assert e4.DEFAULT_ORDER[6:10] == ["x2_nostatic_seed1", "x3_vn_nostatic_seed1", "x2_nostatic_seed2", "x3_vn_nostatic_seed2"]
     assert e4.DEFAULT_ORDER[10] == "v3_structure_nowd"                         # V3-structure weight_decay control
     assert e4.DEFAULT_ORDER[11:19] == V3_STRUCTURE_FOLLOWUPS_8                 # seed1 -> seed2 -> vn -> cs -> wd1e4 -> wd3e4 -> patience8 -> dropout30
     assert e4.DEFAULT_ORDER[19:21] == VN_SEED_CONFIRM_2                        # vn seed1 -> seed2 (confirming v3_structure_nowd_vn)
-    assert set(e4.RECIPES) == set(e4.DEFAULT_ORDER) == set(ALL_21)
-    assert len({e4.RECIPES[n]["tag"] for n in e4.RECIPES}) == 21               # every tag unique, old and new
+    assert e4.DEFAULT_ORDER[21:23] == CS_SEED_CONFIRM_2                        # cs seed1 -> seed2 (confirming v3_structure_nowd_cs)
+    assert set(e4.RECIPES) == set(e4.DEFAULT_ORDER) == set(ALL_23)
+    assert len({e4.RECIPES[n]["tag"] for n in e4.RECIPES}) == 23               # every tag unique, old and new
     r = e4.RECIPES
     assert (r["x1_cslabel"]["label_source"], r["x1_cslabel"]["static_const"], r["x1_cslabel"]["vol_rank"]) == ("cs", False, False)
     assert (r["x2_cslabel_nostatic"]["label_source"], r["x2_cslabel_nostatic"]["static_const"]) == ("cs", True)
@@ -137,7 +140,7 @@ def test_recipe_opts_common_settings_and_fingerprints_differ():
     assert base["hparams"]["dropout"] == pytest.approx(0.17)                    # base not mutated by dropout override either
     assert e4.recipe_opts("x1_cslabel", {**base, "state_size_override": 8})["hparams"]["state_size"] == 8
     fps = {n: e4.cheap_fingerprint(n, e4.recipe_opts(n, base)) for n in e4.RECIPES}
-    assert len({json.dumps(f, sort_keys=True) for f in fps.values()}) == 21     # all 21 fingerprints distinct
+    assert len({json.dumps(f, sort_keys=True) for f in fps.values()}) == 23     # all 23 fingerprints distinct
     assert fps["x3_vn_nostatic"]["label_col"] == "label_vn" and fps["x1_cslabel"]["label_col"] == "cs_quantile"
     assert fps["v3_structure_nowd"]["label_col"] == "label"                     # the SAME fixed label as V3 (not cs_quantile)
     assert fps["x4_cslabel_vnfeat"]["e4"]["vol_rank_cols"] == ["volatility_20d", "sector_volatility"]

@@ -189,6 +189,14 @@ RECIPES = {
     "v3_structure_nowd_vn_seed2": dict(tag="V3wd0vns2", label_source="label_vn", static_const=False, vol_rank=False,
                                        weight_decay=0.0, seed=2,
                                        desc="v3_structure_nowd_vn, seed=2 -- same seed-confirmation as seed1."),
+    "v3_structure_nowd_cs_seed1": dict(tag="V3wd0css1", label_source="cs", static_const=False, vol_rank=False,
+                                       weight_decay=0.0, seed=1,
+                                       desc="v3_structure_nowd_cs, seed=1 -- seed0 was the best single result so far "
+                                            "(val 0.073/OOT 0.029); the label_vn seed-confirm showed an equally strong "
+                                            "seed0 result did NOT replicate, so confirm before trusting this one too."),
+    "v3_structure_nowd_cs_seed2": dict(tag="V3wd0css2", label_source="cs", static_const=False, vol_rank=False,
+                                       weight_decay=0.0, seed=2,
+                                       desc="v3_structure_nowd_cs, seed=2 -- same seed-confirmation as seed1."),
     "v3_structure_wd1e4": dict(tag="V3wd1e4", label_source="label", static_const=False, vol_rank=False,
                                weight_decay=0.0001,
                                desc="v3_structure_nowd with weight_decay=1e-4 instead of 0 -- a small Adam L2 between 0 "
@@ -219,7 +227,11 @@ DEFAULT_ORDER = ["x1_cslabel", "x2_cslabel_nostatic", "x3_vn_nostatic", "x4_csla
                   "v3_structure_nowd_patience8", "v3_structure_nowd_dropout30",
                   # label_vn seed-confirmation: v3_structure_nowd_vn (seed0) nearly doubled OOT timing IC vs the
                   # fixed-label base -- confirm before finalizing as the candidate.
-                  "v3_structure_nowd_vn_seed1", "v3_structure_nowd_vn_seed2"]
+                  "v3_structure_nowd_vn_seed1", "v3_structure_nowd_vn_seed2",
+                  # cs seed-confirmation: v3_structure_nowd_cs (seed0) is the best single result so far (val 0.073/
+                  # OOT 0.029), but the label_vn seed-confirm above showed an equally strong seed0 result was a
+                  # fluke -- confirm cs the same way before trusting it.
+                  "v3_structure_nowd_cs_seed1", "v3_structure_nowd_cs_seed2"]
 
 
 # --------------------------------------------------------------------------------------------
