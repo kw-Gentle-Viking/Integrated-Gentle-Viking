@@ -4,6 +4,7 @@ import os
 from fastapi import APIRouter, Depends, Header, HTTPException
 
 from app.ai_history import record_predictions
+from app.ai_universe import is_ai_covered_ticker
 from app.db import SessionLocal
 from app.dependencies import get_current_user
 from app.models import LiveCandle, User
@@ -221,6 +222,23 @@ def get_once_result(job_id: str):
 @router.post("/agreement")
 def analyze_model_agreement(payload: AgreementAnalysisRequest, current_user: User = Depends(get_current_user)):
     """추천 리포트와 TFT 예측 결과의 합치성/불일치 이유를 해석."""
+    if not is_ai_covered_ticker(payload.ticker):
+        # 추천 리포트(Gemini, 코스피200+코스닥150 풀)의 종목이 TFT 유니버스(코스피 200종목) 밖이면
+        # tft_signal에는 실제 모델 의견이 없다. 이걸 그냥 "HOLD"로 정규화해 "TFT는 관망 의견"이라는
+        # 그럴듯하지만 허위인 해석을 만들어내고 있었다(2026-10-02 통합 감사) -- 평가한 적이 없다는
+        # 사실을 그대로 드러낸다.
+        return {
+            "status": "no_tft_coverage",
+            "recommendation_signal": payload.recommendation_signal,
+            "tft_signal": None,
+            "alignment_label": "비교 불가",
+            "alignment_level": "no_coverage",
+            "summary": f"{payload.ticker}은 TFT 모델이 분석하는 종목이 아니라 비교할 수 없습니다.",
+            "interpretation": "추천 리포트는 더 넓은 종목 풀(뉴스·공시·재료 기반)에서 만들어지지만, TFT 모델은 "
+                               "코스피 상위 200종목만 학습·추론합니다. 이 종목은 TFT 유니버스 밖이라 모델이 평가한 적이 "
+                               "없고, 따라서 '의견 일치/불일치'라는 비교 자체가 성립하지 않습니다.",
+            "action_note": "이 종목에 대해서는 추천 리포트 근거만으로 판단하세요.",
+        }
     return generate_agreement_analysis(payload.model_dump())
 
 
