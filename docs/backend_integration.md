@@ -110,7 +110,9 @@ no_tft_coverage 응답, `/ai/predictions` stale 필드, `/ai/realtime` pred_labe
 `/trade/once` 혼합 바구니의 `excluded_unsupported_tickers` 분리, `AIPredictionHistory`에 ONCE
 결과 기록, 프론트 dev 서버.
 
-**로컬 실행 중인 프로세스** (tmux): `backend-api`(8000), `ai-serving`(8001,
-`serving.api_server:app`, dl_env에 fastapi/uvicorn 설치함), `ai-poller`(`serving.poll_commands`,
-10초 주기), `frontend-dev`(3000). `ai-serving`/`ai-poller`는 아직 crontab에 없음 — 재부팅 시
-수동으로 다시 띄워야 함(10/6 전 crontab 등록 필요).
+**프로세스 상태**: `backend-api`(8000)/`frontend-dev`(3000)는 tmux로 수동 실행 중(재부팅 시 다시
+띄워야 함). `ai-serving`(8001, `serving.api_server:app`, dl_env에 fastapi/uvicorn 설치함)과
+`serving.poll_commands`(커맨드 큐 중계)는 **crontab에 등록 완료**(`@reboot`+5분마다 헬스체크/
+재시작 + 1분마다 poll) — 재부팅에도 살아남음. 기존 `serving.inference_pipeline`(5분 push) 크론도
+전역 GCP 설정 대신 로컬 `.env`를 쓰도록 같이 고쳤음(자세한 내용은 `docs/serving_architecture.md`의
+"배포(crontab)" 절).

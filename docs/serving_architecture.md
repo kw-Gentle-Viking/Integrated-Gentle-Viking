@@ -66,8 +66,14 @@ TFT(Temporal Fusion Transformer) 모델을 백엔드(Back-Gentle-Viking)에 공�
    대해 추론을 돌리고, 결과를 백엔드 `POST {BACKEND_WEBHOOK_URL}/ai/realtime`로 push (`X-API-Key` 헤더 인증,
    `AI_SERVER_API_KEY` 공유 비밀값 — AI/백엔드 양쪽 기본값 통일됨, 2026-10-02). 실패한 종목은 결과 배열에서
    그냥 빠짐(백엔드가 요청한 개수와 받은 개수를 대조하지는 않음).
-2. **명령 기반 (`api_server.py`의 `POST /command`)**: 백엔드가 자동매매 시작/중지/1회 실행을 이 엔드포인트로
-   요청.
+2. **명령 기반 (`api_server.py`의 `POST /command`)**: 백엔드가 자동매매 시작/중지/1회 실행을 요청하는
+   경로. 단, 백엔드(`app/routes_trade.py`)는 이 엔드포인트를 직접 호출하지 않고 자기 메모리
+   `command_queue`에 쌓아두기만 한다(`GET /ai/commands/pending`로 조회 가능) — 그 큐를 이 `/command`로
+   그대로 중계하는 게 `serving/poll_commands.py`다(크론, 1분마다 `--once`). 이 폴러가 없으면 `/trade/once`
+   등으로 넣은 요청이 큐에 쌓인 채 아무도 안 가져가서 조용히 아무 일도 안 일어난다 — 운영 원본
+   `/home/user/poll_commands.py`는 운영 `api_server.py`를 직접 import하는 방식이라 이 프로젝트와는
+   무관했고, 실제로 서버를 다 띄워서 end-to-end로 돌려보기 전까지는 이 연결 자체가 없다는 걸 몰랐다
+   (2026-10-03 실제 테스트로 발견, `serving/poll_commands.py` 신설로 해결).
    - `START`: `req.tickers`를 `active_tickers.json`에 등록(user_id별로 쌓이고 합쳐짐) — 이후 5분 주기 push가
      이 종목들을 포함.
    - `STOP`: 해당 user_id 등록 제거.
@@ -83,6 +89,23 @@ TFT(Temporal Fusion Transformer) 모델을 백엔드(Back-Gentle-Viking)에 공�
 인증 비대칭에 주의: 실시간 시세 조회(`get_current_price` 등)는 `KIS_MOCK` 설정과 무관하게 항상
 `REAL_BASE_URL`/실계좌 토큰을 쓴다(모의계좌는 시세 품질이 떨어지는 KIS 정책 때문) — 매매 자체는 모의계좌로
 나가지만 시세는 실계좌 인증으로 조회한다는 뜻.
+
+## 배포 (crontab, 2026-10-03)
+
+세 가지 모두 `crontab -l`에 등록돼 있고, 전역 crontab 맨 위에 선언된 `BACKEND_WEBHOOK_URL`(GCP,
+`34.64.252.181:8000`)/`AI_SERVER_API_KEY`(`dev-ai-key`) — 운영 파이프라인·이 프로젝트가 GCP로
+배포됐을 때를 위한 값 — 를 전혀 쓰지 않고 각자 이 레포의 `.env`(`set -a && . ./.env && set +a`)를
+명시적으로 source해서 **로컬 백엔드(`localhost:8000`)와 프로젝트 전용 키로만** 통신한다:
+
+- `*/5 * * * 1-5 serving.inference_pipeline` — 5분 push.
+- `@reboot` + `*/5 * * * * (헬스체크)` — `serving.api_server:app`(8001)을 띄우고, 죽어 있으면 재시작.
+- `* * * * * serving.poll_commands --once` — 백엔드 커맨드 큐 중계.
+
+**GCP로 옮겨갈 때(지금 계획엔 없지만, 나중에 그렇게 되면)**: 이 코드/스크립트 자체는 손댈 필요가 없다 —
+`BACKEND_WEBHOOK_URL`/`AI_SERVER_API_KEY`가 전부 환경변수로 읽히므로, GCP 쪽 머신의 crontab(또는
+systemd 등)에서 그 환경변수를 GCP 백엔드 주소/키로 설정하기만 하면 된다. 지금 이 로컬 crontab 파일을
+그대로 옮겨 쓰는 게 아니라 GCP 쪽에 별도로 등록해야 하는 것도 그 때 할 일 — 지금 로컬 엔트리를
+GCP 값으로 바꿔두는 것은 아무 의미가 없다(로컬 드라이런이 깨질 뿐).
 
 ## 배치 랭킹 (`universe_batch.py`) — 실시간 루프와 별개
 
