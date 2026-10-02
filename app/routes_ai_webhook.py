@@ -76,7 +76,14 @@ def build_demo_prediction(ticker: str) -> dict:
 
 def parse_prediction(result: PredictionResult) -> dict:
     signal = SIGNAL_MAP.get(str(result.pred_str).strip(), "HOLD")
-    signal = SIGNAL_MAP.get(str(result.pred_label), signal)
+    label_key = str(result.pred_label)
+    if label_key in SIGNAL_MAP:
+        signal = SIGNAL_MAP[label_key]
+    else:
+        # pred_label은 항상 0/1/2 여야 한다 -- 서빙/모델 쪽 버그로 범위를 벗어난 값을 보냈다는 뜻이라
+        # pred_str 기준 폴백으로 조용히 넘어가지 않고 남긴다(2026-10-02 통합 감사).
+        print(f"WARNING [{result.ticker}] pred_label={result.pred_label}이 예상 범위(0/1/2) 밖 -- "
+              f"pred_str('{result.pred_str}') 기준으로 폴백(signal={signal})")
     confidence = max(result.prob_buy, result.prob_hold, result.prob_sell)
     return {
         "ticker": result.ticker,
@@ -152,6 +159,10 @@ def receive_once_callback(
         "inference_at": payload.inference_at,
         "results": parsed_results,
     }
+
+    # realtime push만 AIPredictionHistory에 쌓이고 ONCE 결과는 빠져 있었다 -- 모델 체크포인트/라벨
+    # 정의가 바뀐 뒤 "이 ONCE 리포트가 어떤 모델로 나왔는지" 사후 추적이 불가능했다(2026-10-02 통합 감사).
+    record_predictions(parsed_results)
 
     ai_signal_event.set()
 

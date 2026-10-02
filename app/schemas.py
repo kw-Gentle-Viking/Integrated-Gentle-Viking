@@ -175,6 +175,11 @@ class PredictionResult(BaseModel):
 class RealtimePayload(BaseModel):
     inference_at: str
     results: list[PredictionResult]
+    # AI 서버(serving/inference_pipeline.py)가 매번 보내는데 스키마에 없어서 조용히 버려지고 있었다
+    # -- push를 job 단위로 추적할 수 없었다(2026-10-02 통합 감사). 당장 로직에서 쓰진 않지만, 받은
+    # 값을 버리지 않도록 받아만 둔다.
+    job_id: str = ""
+    user_id: str = ""
 
 
 class OnceCallbackPayload(BaseModel):
