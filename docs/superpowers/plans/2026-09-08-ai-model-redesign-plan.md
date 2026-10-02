@@ -1440,6 +1440,125 @@ git commit -m "feat: build joined feature_pool table with leverage-derived featu
 
 ---
 
+## Task 10.5: 매크로 변화율/스프레드 파생 피처 (Task 13 리뷰에서 발견된 스코프 갭)
+
+**배경**: Task 13 구현 중 `HISTORICAL_COLS_DEFAULT`를 라이브 `feature_pool` 스키마와 대조한 결과, 매크로 시황 카테고리 11개 컬럼(`kospi_ret`, `kosdaq_ret`, `snp500_ret`, `nasdaq_ret`, `phlx_semi_ret`, `vix_chg`, `usd_krw_chg`, `us_10y_yield_chg`, `rate_spread_us_kr`, `wti_ret`, `gold_ret`)이 존재하지 않는 것으로 확인됨. `feature_pool`엔 원본 레벨값(`snp500_close`, `nasdaq_close`, `phlx_semi_close`, `vix`, `wti_crude_oil`, `gold_price`, `usd_krw`, `us_10y_yield`, `fed_rate`, `kr_base_rate`, `index_0001`(KOSPI), `index_1001`(KOSDAQ))만 있고, Task 11에서 이 레벨값들은 비정상성(non-stationary) 때문에 클리핑/스케일링 대상에서 이미 제외됨. 사용자 결정(2026-09-09): 파생 컬럼 계산 작업을 지금 추가한다.
+
+**Files:**
+- Create: `features/macro_features.py`
+- Create: `features/add_macro_features.py`
+- Test: `features/test_macro_features.py`
+
+**Interfaces:**
+- Produces: `compute_return(series: pd.Series) -> pd.Series` (day-over-day % 수익률, `series.pct_change()`), `compute_change(series: pd.Series) -> pd.Series` (day-over-day 절대 변화량, `series.diff()`), `compute_rate_spread(a: pd.Series, b: pd.Series) -> pd.Series` (레벨 차분, `a - b`)
+
+**정확한 컬럼별 공식 (추측 금지 — 아래 표대로):**
+
+| 신규 컬럼 | 원본 컬럼 | 함수 | 비고 |
+|---|---|---|---|
+| `kospi_ret` | `index_0001` | `compute_return` | KRX 지수코드 0001=KOSPI |
+| `kosdaq_ret` | `index_1001` | `compute_return` | KRX 지수코드 1001=KOSDAQ |
+| `snp500_ret` | `snp500_close` | `compute_return` | |
+| `nasdaq_ret` | `nasdaq_close` | `compute_return` | |
+| `phlx_semi_ret` | `phlx_semi_close` | `compute_return` | |
+| `wti_ret` | `wti_crude_oil` | `compute_return` | |
+| `gold_ret` | `gold_price` | `compute_return` | |
+| `vix_chg` | `vix` | `compute_change` | VIX 자체가 이미 %값이라 diff(포인트 변화) 사용, pct_change 아님 |
+| `usd_krw_chg` | `usd_krw` | `compute_change` | 원화 절대 변화(diff), pct 아님 — `_chg` 접미사는 diff, `_ret`은 pct_change로 통일 |
+| `us_10y_yield_chg` | `us_10y_yield` | `compute_change` | 금리는 이미 %이므로 diff(bp 변화) |
+| `rate_spread_us_kr` | `us_10y_yield`, `kr_base_rate` | `compute_rate_spread(us_10y_yield, kr_base_rate)` | 전일 대비 변화 아님 — 당일 레벨의 스프레드(`us_10y_yield - kr_base_rate`), 개별 레벨보다 안정적 |
+
+**주의 — 계산 grain**: 이 값들은 종목별이 아니라 거래일별로 전종목 동일값이 broadcast된 것(feature_pool에 이미 이렇게 조인되어 있음, Task 10 참고). 반드시 `feature_pool`에서 `trade_date`로 dedup한 뒤 날짜 순서로 정렬해서 pct_change/diff를 계산하고(종목별로 나눠 계산하면 안 됨 — 같은 날짜가 200번 반복되므로 diff가 0이 돼버림), 계산 후 `trade_date`로 다시 200종목 전체에 join-back할 것.
+
+- [ ] **Step 1: 실패하는 테스트 작성**
+
+`features/test_macro_features.py`:
+
+```python
+import pandas as pd
+from features.macro_features import compute_return, compute_change, compute_rate_spread
+
+
+def test_compute_return_is_pct_change():
+    s = pd.Series([100.0, 110.0, 99.0])
+    result = compute_return(s)
+    assert result.iloc[0] != result.iloc[0]  # NaN for first row
+    assert abs(result.iloc[1] - 0.10) < 1e-9
+    assert abs(result.iloc[2] - (-0.1)) < 1e-9
+
+
+def test_compute_change_is_absolute_diff():
+    s = pd.Series([20.0, 22.5, 21.0])
+    result = compute_change(s)
+    assert result.iloc[0] != result.iloc[0]  # NaN for first row
+    assert abs(result.iloc[1] - 2.5) < 1e-9
+    assert abs(result.iloc[2] - (-1.5)) < 1e-9
+
+
+def test_compute_rate_spread_is_same_day_level_diff():
+    a = pd.Series([4.5, 4.6])
+    b = pd.Series([3.5, 3.5])
+    result = compute_rate_spread(a, b)
+    assert abs(result.iloc[0] - 1.0) < 1e-9
+    assert abs(result.iloc[1] - 1.1) < 1e-9
+```
+
+- [ ] **Step 2: 테스트 실패 확인**
+
+Run: `/home/user/miniconda3/envs/kis_collector/bin/python -m pytest features/test_macro_features.py -v`
+Expected: FAIL
+
+- [ ] **Step 3: 구현**
+
+`features/macro_features.py`:
+
+```python
+import pandas as pd
+
+
+def compute_return(series: pd.Series) -> pd.Series:
+    return series.pct_change()
+
+
+def compute_change(series: pd.Series) -> pd.Series:
+    return series.diff()
+
+
+def compute_rate_spread(a: pd.Series, b: pd.Series) -> pd.Series:
+    return a - b
+```
+
+- [ ] **Step 4: 테스트 통과 확인**
+
+Run: `/home/user/miniconda3/envs/kis_collector/bin/python -m pytest features/test_macro_features.py -v`
+Expected: PASS (3 tests)
+
+- [ ] **Step 5: `feature_pool`에 11개 신규 컬럼 추가 및 라이브 백필**
+
+`features/add_macro_features.py` — 위 표의 정확한 공식대로:
+1. `feature_pool`에서 `trade_date` + 원본 12개 레벨 컬럼을 DISTINCT ON (trade_date)로 로드, `trade_date` 오름차순 정렬
+2. 위 공식표대로 11개 신규 컬럼 계산 (날짜 grain에서만, 종목별 반복 금지)
+3. `ALTER TABLE feature_pool ADD COLUMN IF NOT EXISTS <col> NUMERIC` × 11
+4. `trade_date` 기준으로 200종목 전체 행에 UPDATE (join-back)
+5. 첫 거래일(2019-01-02)은 전일 데이터가 구조적으로 없어 9개 컬럼(`rate_spread_us_kr` 제외)이 NULL — 이건 ffill 대상이 아니라 진짜 최초 시점의 구조적 결측(Task 3의 상장일 결측과 같은 성격)이므로 NULL 유지, `docs/data_units.md`에 그렇게 기록
+6. `docs/data_units.md`에 11개 신규 컬럼의 단위(무차원 비율 또는 절대 변화량) 기록
+
+Run: `set -a && source .env && set +a && /home/user/miniconda3/envs/kis_collector/bin/python features/add_macro_features.py`
+Expected: `feature_pool` 61 + 11 = 72 컬럼, 376,682행 전부 업데이트, 첫 거래일만 9개 컬럼 NULL
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add features/macro_features.py features/add_macro_features.py features/test_macro_features.py docs/data_units.md
+git commit -m "feat: derive macro return/change features into feature_pool"
+```
+
+**후속 영향 (이 태스크 완료 후 별도로 처리)**:
+- Task 11(클리핑/스케일링)을 재오픈해서 신규 11개 컬럼을 `fit_clip_bounds`/`fit_scaler` 대상에 포함해 재적합해야 함(2019-2023 train split만 사용, 기존 아티팩트 재생성).
+- Task 13(`training/config.py`)을 재오픈해서 `HISTORICAL_COLS_DEFAULT`에 이 11개 컬럼을 추가해야 함(23→34개).
+
+---
+
 ## Task 11: train-split 기준 클리핑/스케일링
 
 **Files:**
@@ -2100,7 +2219,18 @@ def run_optuna_study(objective_fn, n_trials: int = 20) -> optuna.Study:
 Run: `/home/user/miniconda3/envs/kis_collector/bin/python -m pytest training/test_ablation.py -v`
 Expected: PASS (2 tests)
 
-- [ ] **Step 5: 1단계 실제 실행 — Optuna 튜닝(20 trials) → 최적 하이퍼파라미터로 ablation(레버리지 피처 6개 각각 제거 실험 포함) → `docs/model_versions.md`에 v1 기록**
+**Step 5 amendment (2026-09-16, user-prompted — GPU/스케일/재개 가능성 확정)**:
+
+- GPU 환경: `kis_collector` conda env의 torch(cu130)가 이 서버 드라이버(CUDA 12.8 지원)보다 신버전을 요구해 `cuda.is_available()=False` — 라이브 확인됨(2026-09-11). 프로덕션 crontab이 `kis_collector`를 공유(5분마다 `inference_pipeline.py` 실행)하므로 그 env는 건드리지 않고, 별도의 기존 conda env `dl_env`(crontab에 없음, torch 2.6.0+cu124, CUDA 사용 가능 확인됨)를 이 프로젝트의 GPU 학습 전용으로 사용한다. `dl_env`엔 tft-torch 포크(editable), omegaconf, wandb, psycopg2-binary를 추가 설치해뒀다(2026-09-11).
+- 실측 벤치마크(2026-09-16, 실제 1단계 train 데이터 234,026 샘플, batch_size=128, RTX 2070 SUPER): **1 epoch = 288.9초(약 4.8분)**.
+- 스케일 결정: Optuna 탐색은 짧게(**3 epoch/trial**, 20 trials), ablation 7회(baseline + 레버리지 피처 6개 각각 제거)는 제대로(**10 epoch/run**) — 총 예상 약 10.4시간(Optuna 20×3×4.8분≈4.8시간 + ablation 7×10×4.8분≈5.6시간).
+- **재개 가능성 요건(필수)**: 사용자가 GPU를 다른 작업과 나눠 써야 해서, 이 Step 5는 한 번에 안 끝나고 GPU가 빌 때마다 짧게 여러 번 나눠 돌려야 한다. 따라서 라이브 실행 스크립트는:
+  1. Optuna study는 SQLite 등 영속 storage로 생성(`optuna.create_study(storage=..., study_name=..., load_if_exists=True)`) — 프로세스가 중간에 죽거나 종료돼도 완료된 trial은 남고, 다음 실행 시 남은 trial 수만 이어서 돈다.
+  2. ablation 7개 결과도 이미 완료된 조합은 스킵하고 남은 것만 실행(예: `docs/model_versions.md`에 이미 기록된 피처-구성 행이 있으면 재실행 안 함, 또는 별도의 작은 progress 파일로 추적).
+  3. 한 번의 호출에 시간/trial 예산(예: `--max-minutes` 인자)을 줄 수 있어서, 예산을 넘기면 진행 중이던 trial/run은 끝까지 완료하고 다음 것을 시작하기 전에 깔끔히 멈춘다(중간에 죽는 것에 의존하지 않음).
+  4. 실제 장시간 실행은 tmux 세션 안에서 돌려서 터미널/세션 재연결에도 살아남게 한다.
+
+- [ ] **Step 5: 1단계 실제 실행 — Optuna 튜닝(20 trials, 3 epoch/trial) → 최적 하이퍼파라미터로 ablation(레버리지 피처 6개 각각 제거 실험 포함, 10 epoch/run) → `docs/model_versions.md`에 v1 기록. 재개 가능하게(위 요건대로) 구현할 것**
 
 `docs/model_versions.md` 초기 구조:
 
