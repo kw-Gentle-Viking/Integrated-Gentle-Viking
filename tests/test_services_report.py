@@ -23,3 +23,13 @@ def test_build_user_prompt_handles_interpretability_none():
 def test_build_user_prompt_handles_empty_interpretability_dict():
     prompt = build_user_prompt(_result(interpretability={}))
     assert "005930" in prompt
+
+
+def test_generate_report_handles_missing_gemini_api_key_gracefully(monkeypatch):
+    # genai.Client(api_key=None)이 try 밖에 있어서 GEMINI_API_KEY가 비어있으면(로컬 드라이런
+    # 기본값) ValueError가 그대로 올라가 /ai/callback 전체가 500이 됐다 (실제 서버에 요청을
+    # 보내 재현, 2026-10-03).
+    from app.services_report import generate_report
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    report = generate_report(_result())
+    assert "보고서 생성 실패" in report

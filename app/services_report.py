@@ -188,11 +188,14 @@ def build_user_prompt(result: dict, ticker_name: str = "") -> str:
 
 def generate_report(result: dict, ticker_name: str = "") -> str:
     """Gemini API로 보고서 생성"""
-    client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-
     user_prompt = build_user_prompt(result, ticker_name)
 
     try:
+        # genai.Client(...) 생성 자체가 try 밖에 있어서, GEMINI_API_KEY가 비어있거나(로컬
+        # 드라이런 기본값) 잘못되면 여기서 바로 ValueError가 터져 /ai/callback 전체가 500이
+        # 됐다(실제 서버에 요청을 보내 재현/확인함, 2026-10-03). generate_content 호출만 감싸던
+        # try를 Client 생성까지 넓혔다.
+        client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
         resp = client.models.generate_content(
             model="gemini-2.5-flash",
             contents=user_prompt,
