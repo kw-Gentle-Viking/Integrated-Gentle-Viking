@@ -51,7 +51,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 SERVING_DIR = os.path.dirname(os.path.abspath(__file__))
-AI_SERVER_API_KEY = os.environ.get("AI_SERVER_API_KEY", "changeme")
+AI_SERVER_API_KEY = os.environ.get("AI_SERVER_API_KEY", "dev-ai-key")  # 백엔드 기본값(dev-ai-key)과 통일 (2026-10-02 통합 감사)
 TICKERS_FILE = os.environ.get("SERVING_TICKERS_FILE", os.path.join(SERVING_DIR, "active_tickers.json"))
 LABEL_MAP = {0: "매수", 1: "관망", 2: "매도"}
 
