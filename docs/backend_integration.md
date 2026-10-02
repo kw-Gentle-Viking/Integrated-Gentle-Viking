@@ -78,3 +78,39 @@ Front(로직만, UI 무변경): 새로고침이 `job_id`(GET /ai/once/{job_id})�
 프론트 미사용 목데이터(`mockPopularStocks`, 코스닥 종목+ETF 혼재) 제거(Front `679f7a2`).
 
 전체 감사 원본: `docs/integration_audit_2026-10-02.md`.
+
+## 2026-10-03 실제 end-to-end 테스트로 발견/수정
+
+서버를 실제로 띄워서 curl로 직접 호출해봄 — 위 수정들이 실제로 동작하는지 확인하는 과정에서 추가로
+3건을 발견/수정했다(정적 분석/단위테스트만으로는 못 잡는 종류).
+
+1. **`generate_report`가 `GEMINI_API_KEY` 비어있으면 그대로 크래시** — `genai.Client(...)` 생성이
+   try 밖에 있어서, interpretability 수정을 통과한 뒤에도 ONCE 콜백이 여전히 500. try 안으로 이동.
+   (Back `c819ed7`)
+2. **`personas` 테이블이 비어있었음**(seed 안 됨, 환경설정 누락) — ONCE 콜백의 `save_report`가 FK
+   위반으로 500. `app.seed_rec.seed_personas()` 실행해서 5개 페르소나 채움.
+3. **`stock_db_v2.feature_pool`이 25일간 업데이트 안 됨**(2026-09-08에서 멈춤, 2026-10-03 기준) —
+   AI 모델이 실제로는 어떤 종목도 추론 못 하는 상태였음(정상적으로 "stale history" 거부는 했지만).
+   `price_daily`/`daily_valuation`/`investor_flow_daily`/`stock_events`/`market_global`/
+   `market_index_daily`/`sector_daily_ohlcv`/`market_events`/`calendar`는 운영 `stock_db`(같은 KIS
+   데이터, 350종목 전체를 매일 수집 중이던 별개 파이프라인)에서 AI 200종목분만 캐치업 복사,
+   `leverage_daily`는 `data_collection/run_leverage_backfill.py` 재실행으로 캐치업(`vi_events`는
+   KIS API에 과거 조회 엔드포인트가 없어 원래부터 비어있음, 알려진 제약). `features/build_features.py
+   --start 2026-06-01 --end 2026-10-02`로 feature_pool 재빌드 완료, 60일 이동평균 등 롤링 피처가
+   충분한 lookback을 갖도록 범위를 넉넉히 잡음.
+4. **`/trade/once`(및 start/stop)가 큐에 넣은 커맨드를 아무도 가져가지 않음** — 운영 원본
+   `/home/user/poll_commands.py`는 운영 `/home/user/api_server.py`를 직접 import해서 호출하는
+   방식이라 이 프로젝트의 서빙/모델과는 무관했음. `serving/poll_commands.py` 신설(단순 HTTP
+   릴레이: 백엔드 큐 폴링 -> 이 프로젝트 `serving/api_server.py`의 `/command`로 전달). 백엔드
+   `/trade/once` -> 큐 -> 이 폴러 -> AI 서버 -> 실제 TFT 추론(`v3_structure_nowd_cs-seed0`) ->
+   콜백 -> `GET /ai/once/{job_id}` 조회까지 전체 경로 실제로 확인함. (AI `247e061`)
+
+**확인됨(실제 요청으로 검증, 추가 수정 불필요)**: Basket AI-커버리지 검증(400 거부), `/ai/agreement`
+no_tft_coverage 응답, `/ai/predictions` stale 필드, `/ai/realtime` pred_label 이상값 WARNING 로그,
+`/trade/once` 혼합 바구니의 `excluded_unsupported_tickers` 분리, `AIPredictionHistory`에 ONCE
+결과 기록, 프론트 dev 서버.
+
+**로컬 실행 중인 프로세스** (tmux): `backend-api`(8000), `ai-serving`(8001,
+`serving.api_server:app`, dl_env에 fastapi/uvicorn 설치함), `ai-poller`(`serving.poll_commands`,
+10초 주기), `frontend-dev`(3000). `ai-serving`/`ai-poller`는 아직 crontab에 없음 — 재부팅 시
+수동으로 다시 띄워야 함(10/6 전 crontab 등록 필요).
