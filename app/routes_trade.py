@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app.ai_universe import is_ai_covered_ticker
 from app.db import get_db,SessionLocal
 from app.dependencies import get_current_user
+from app.kis_positions import apply_fill, load_live_positions
 from app.models import User,TradeLog,Basket,LiveCandle,ManualTradeLock,AutoTradeDecision
 from app.ai_client import AIClient
 from app.services_allocation import allocate_portfolio
@@ -15,7 +16,7 @@ from datetime import datetime
 from pydantic import BaseModel
 from app.schemas import AllocationConfig,TickerStrategy
 from app.strategy_factory import create_strategy
-from backtest.engine.risk import Portfolio
+from backtest.engine.risk import Portfolio, RiskLimits, RiskManager
 from typing import Optional
 
 from app.strategy_factory import create_strategy, get_warmup_count, get_timeframe, resolve_strategy_id
@@ -149,16 +150,6 @@ def add_auto_decision(
     )
 
 
-async def get_market_close(ticker: str) -> int:
-    from app.routes_kis import get_current_price
-
-    data = await get_current_price(ticker)
-    output = data.get("output") or {}
-    close = int(output.get("stck_prpr") or 0)
-    if close <= 0:
-        raise HTTPException(status_code=502, detail=f"{ticker} 현재가 조회 실패")
-    return close
-
 async def trading_loop(user_id: int, tickers: list[str], persona_id: int,
     total_capital: int,
     config: AllocationConfig,
@@ -183,6 +174,9 @@ async def trading_loop(user_id: int, tickers: list[str], persona_id: int,
     portfolio = Portfolio()
     portfolio.cash = total_capital
     portfolio.equity = total_capital
+    # 종목당/1회 주문당/전체 노출 상한 -- backtest 엔진엔 이미 있었지만 실거래 루프엔 연결돼 있지 않았다
+    # (2026-10-02 통합 감사). 사이클 전체에 걸쳐 쿨다운/halt 상태를 유지해야 하므로 루프당 1회만 생성.
+    risk_mgr = RiskManager(RiskLimits())
 
     ws = KISWebSocket(
         app_key=os.getenv("KIS_APP_KEY"),
@@ -273,7 +267,16 @@ async def trading_loop(user_id: int, tickers: list[str], persona_id: int,
             try :
                 print(f"[User {user_id}] 자동매매 실행...")
 
-                predictions = [] 
+                # 포지션은 메모리에 따로 추적하지 않고 매 사이클 KIS 실제 잔고를 그대로 읽는다 --
+                # 조회 자체가 실패하면 '보유 없음'으로 가정하지 않고 이번 사이클을 통째로 건너뛴다
+                # (조용히 빈 상태로 넘어가면 반복매수 버그가 재현된다, 2026-10-02 통합 감사).
+                try:
+                    portfolio.positions = load_live_positions(broker)
+                except Exception as e:
+                    print(f"  [User {user_id}] KIS 포지션 조회 실패, 이번 주기 스킵: {e}")
+                    continue
+
+                predictions = []
                 for ticker in tickers:
                     pred = ai_client.predict(ticker)
                     predictions.append(pred)
@@ -411,8 +414,20 @@ async def trading_loop(user_id: int, tickers: list[str], persona_id: int,
                                 strategy_id=strategies[ticker].__class__.__name__, price=close,
                             )
                             continue
-                            
-                        # 주문 실행 + 재시도 
+
+                        order_notional = qty * close
+                        if not risk_mgr.check_pretrade(pd.Timestamp.now(), portfolio, ticker, order_notional):
+                            print(f"  {ticker}: 리스크 한도 초과 -> HOLD")
+                            add_auto_decision(
+                                db, user_id, ticker, "HOLD", "RISK_LIMIT_EXCEEDED",
+                                f"주문금액 {int(order_notional):,}원이 리스크 한도(종목당/1회 주문/전체 노출 "
+                                "상한)를 초과",
+                                ai_signal=signal, ai_confidence=confidence,
+                                strategy_id=strategies[ticker].__class__.__name__, price=close,
+                            )
+                            continue
+
+                        # 주문 실행 + 재시도
                         MAX_RETRY = 3
                         RETRY_DELAY = 10
                         order_status = "FAILED"
@@ -442,6 +457,9 @@ async def trading_loop(user_id: int, tickers: list[str], persona_id: int,
                                     await asyncio.sleep(RETRY_DELAY)
                                 else:
                                     print(f"  {ticker}: 최종 실패")
+
+                        if order_status == "FILLED":
+                            apply_fill(portfolio, ticker, order_signal, qty, close)
 
                         db.add(TradeLog(
                                 user_id=user_id,
@@ -475,137 +493,6 @@ async def trading_loop(user_id: int, tickers: list[str], persona_id: int,
         warmup_requirements.pop(user_id, None)
         warmup_received.pop(user_id, None)
         print(f" [User {user_id}] 자동매매 중단됨")
-
-
-async def run_once(
-    user_id: int,
-    tickers: list[str],
-    persona_id: int,
-    total_capital: int,
-    config: AllocationConfig,
-    ticker_strategies: list[TickerStrategy],
-):
-    """1회 실행"""
-    strategies = {}
-    for ts in ticker_strategies:
-        strategies[ts.ticker] = create_strategy(ts.ticker, ts.strategy_id, ts.params)
-    for t in tickers:
-        if t not in strategies:
-            strategies[t] = create_strategy(t, "ultra_safe", None)
-
-    portfolio = Portfolio()
-    portfolio.cash = total_capital
-    portfolio.equity = total_capital
-
-    # AI 추론
-    predictions = []
-    for ticker in tickers:
-        pred = ai_client.predict(ticker)
-        predictions.append(pred)
-
-    # 포트폴리오 분배
-    allocation = allocate_portfolio(
-        predictions=predictions,
-        persona_id=persona_id,
-        total_capital=total_capital,
-        max_weight=config.max_weight,
-        cash_reserve=config.cash_reserve,
-        min_confidence=config.min_confidence,
-        use_persona_boost=config.use_persona_boost,
-    )
-    allocation_map = {a["ticker"]: a for a in allocation}
-
-    pred_map = {p["ticker"]: p for p in predictions}
-
-    db = SessionLocal()
-    results = []
-    try:
-        for ticker in tickers:
-            close = await get_market_close(ticker)
-
-            row = pd.Series(
-                {"close": close, "high": close, "low": close, "volume": 0},
-                name=pd.Timestamp.now(),
-            )
-
-            signal = pred_map[ticker]["signal"]
-            confidence = pred_map[ticker]["confidence"]
-
-            action = "SKIP"
-
-            if confidence < config.min_confidence:
-                action = "SKIP"
-            elif signal == "HOLD":
-                orders = strategies[ticker].generate_orders(row, portfolio)
-                for order in orders:
-                    order_signal = "BUY" if order.side.value == "BUY" else "SELL"
-
-                    if order_signal == "BUY" and ticker in allocation_map:
-                        qty = (allocation_map[ticker]["amount"] // close) // 2
-                    elif order_signal == "SELL":
-                        pos = portfolio.positions.get(ticker)
-                        qty = pos.qty // 2 if pos and pos.qty > 0 else 0
-                    else:
-                        continue
-
-                    if qty > 0:
-                        action = f"HOLD_{order_signal}"
-                        db.add(TradeLog(
-                            user_id=user_id,
-                            ticker=ticker,
-                            side=order_signal,
-                            qty=qty,
-                            price=close,
-                            amount=int(qty * close),
-                            ai_signal=signal,
-                            ai_confidence=confidence,
-                            strategy_id=strategies[ticker].__class__.__name__,
-                            status="FILLED",
-                        ))
-            else:
-                orders = strategies[ticker].generate_orders(row, portfolio)
-                for order in orders:
-                    order_signal = "BUY" if order.side.value == "BUY" else "SELL"
-
-                    if signal == order_signal:
-                        if order_signal == "BUY" and ticker in allocation_map:
-                            qty = allocation_map[ticker]["amount"] // close
-                        elif order_signal == "SELL":
-                            pos = portfolio.positions.get(ticker)
-                            qty = pos.qty if pos and pos.qty > 0 else 0
-                        else:
-                            continue
-
-                        if qty > 0:
-                            action = signal
-                            db.add(TradeLog(
-                                user_id=user_id,
-                                ticker=ticker,
-                                side=order_signal,
-                                qty=qty,
-                                price=close,
-                                amount=int(qty * close),
-                                ai_signal=signal,
-                                ai_confidence=confidence,
-                                strategy_id=strategies[ticker].__class__.__name__,
-                                status="FILLED",
-                            ))
-                    else:
-                        action = "HOLD"
-
-            results.append({
-                "ticker": ticker,
-                "signal": signal,
-                "confidence": confidence,
-                "action": action,
-                "price": close,
-            })
-
-        db.commit()
-    finally:
-        db.close()
-
-    return results
 
 
 # routes_trade.py에 추가
