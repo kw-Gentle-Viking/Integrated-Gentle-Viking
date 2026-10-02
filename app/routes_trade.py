@@ -300,194 +300,203 @@ async def trading_loop(user_id: int, tickers: list[str], persona_id: int,
 
 
                 for ticker in tickers:
+                    try:
 
-                    market = ws.get_price(ticker)
-                    if not market:
-                        print(f" {ticker} : 시세없음 -> 스킵")
-                        add_auto_decision(
-                            db, user_id, ticker, "SKIP", "NO_MARKET_PRICE",
-                            "실시간 시세를 받지 못해 자동매매 판단을 건너뜀",
-                            strategy_id=strategies[ticker].__class__.__name__,
-                        )
-                        continue
-
-                    close = market["price"]
-                    high = market["high"]
-                    low = market["low"]
-                    volume = market["volume"]
-
-                    row = pd.Series(
-                        {"close": close, "high": high, "low": low, "volume": volume},
-                        name=pd.Timestamp.now(),
-                    )
-
-                    # AI 추론
-                    pred_map = {p["ticker"] : p for p in predictions}
-                    signal = pred_map[ticker]["signal"]
-                    confidence = pred_map[ticker]["confidence"]
-                    print(f"  {ticker}: AI {signal} | confidence={confidence:.3f}")
-
-                    if confidence < config.min_confidence:
-                        detail = f"AI 확신도 {confidence:.3f}가 최소 기준 {config.min_confidence:.3f}보다 낮음"
-                        print(f"  {ticker}: 확신도 부족 ({confidence:.3f} < {config.min_confidence:.3f}) -> SKIP")
-                        add_auto_decision(
-                            db, user_id, ticker, "SKIP", "LOW_CONFIDENCE", detail,
-                            ai_signal=signal, ai_confidence=confidence,
-                            strategy_id=strategies[ticker].__class__.__name__, price=close,
-                        )
-                        continue
-                    # if signal == "HOLD":
-                    #     print(f"  {ticker}: AI 관망 부족 -> HOLD")
-                    #     continue
-
-                    # 전략 필터 (봉 데이터 자동 누적됨)
-                    orders = strategies[ticker].generate_orders(row, portfolio)
-                    if not orders:
-                        print(f"  {ticker}: 전략 조건 미충족 -> HOLD")
-                        add_auto_decision(
-                            db, user_id, ticker, "HOLD", "STRATEGY_CONDITION_NOT_MET",
-                            "AI 확신도는 기준을 통과했지만 전략이 BUY/SELL 주문 신호를 만들지 않음",
-                            ai_signal=signal, ai_confidence=confidence,
-                            strategy_id=strategies[ticker].__class__.__name__, price=close,
-                        )
-                        continue
-
-                    # AI + 전략 일치 시 실행
-                    for order in orders:
-                        order_signal = "BUY" if order.side.value == "BUY" else "SELL"
-                        
-                       # 매수: allocation 비중 기반 수량
-                        if order_signal == "BUY" and ticker in allocation_map:
-                            a = allocation_map[ticker]
-
-                            if signal == order_signal:
-                                qty = a["amount"] // close
-                            elif signal == "HOLD":
-                                qty = (a["amount"] // close) // 2 
-                            else:
-                                detail = f"AI 신호 {signal}와 전략 신호 {order_signal}가 일치하지 않음"
-                                print(f"  {ticker}: AI({signal})와 전략({order_signal}) 불일치 -> HOLD")
-                                add_auto_decision(
-                                    db, user_id, ticker, "HOLD", "AI_STRATEGY_MISMATCH", detail,
-                                    ai_signal=signal, ai_confidence=confidence,
-                                    strategy_id=strategies[ticker].__class__.__name__, price=close,
-                                )
-                                continue
-
-                        # 매도: 보유 수량 기반
-                        elif order_signal == "SELL":
-                            pos = portfolio.positions.get(ticker)
-                            if not pos or pos.qty <= 0:
-                                print(f"  {ticker}: 전략 SELL 신호지만 보유 수량 없음 -> HOLD")
-                                add_auto_decision(
-                                    db, user_id, ticker, "HOLD", "NO_POSITION_TO_SELL",
-                                    "전략은 SELL 신호를 만들었지만 포트폴리오에 보유 수량이 없음",
-                                    ai_signal=signal, ai_confidence=confidence,
-                                    strategy_id=strategies[ticker].__class__.__name__, price=close,
-                                )
-                                continue
-
-                            if signal == order_signal:
-                                qty = pos.qty
-                            elif signal == "HOLD":
-                                qty = pos.qty // 2
-                            else:
-                                detail = f"AI 신호 {signal}와 전략 신호 {order_signal}가 일치하지 않음"
-                                print(f"  {ticker}: AI({signal})와 전략({order_signal}) 불일치 -> HOLD")
-                                add_auto_decision(
-                                    db, user_id, ticker, "HOLD", "AI_STRATEGY_MISMATCH", detail,
-                                    ai_signal=signal, ai_confidence=confidence,
-                                    strategy_id=strategies[ticker].__class__.__name__, price=close,
-                                )
-                                continue
-
-                        else:
-                            print(f"  {ticker}: 전략 {order_signal} 신호지만 매수 배분 없음 -> HOLD")
+                        market = ws.get_price(ticker)
+                        if not market:
+                            print(f" {ticker} : 시세없음 -> 스킵")
                             add_auto_decision(
-                                db, user_id, ticker, "HOLD", "NO_BUY_ALLOCATION",
-                                "전략이 BUY 신호를 만들었지만 AI 매수 배분 대상에 포함되지 않음",
-                                ai_signal=signal, ai_confidence=confidence,
-                                strategy_id=strategies[ticker].__class__.__name__, price=close,
-                            )
-                            continue
-
-                        if qty <= 0:
-                            print(f"  {ticker}: 주문 가능 수량 0 -> HOLD")
-                            add_auto_decision(
-                                db, user_id, ticker, "HOLD", "ZERO_ORDER_QUANTITY",
-                                "배정 금액과 현재가 기준 주문 가능 수량이 0주",
-                                ai_signal=signal, ai_confidence=confidence,
-                                strategy_id=strategies[ticker].__class__.__name__, price=close,
-                            )
-                            continue
-
-                        order_notional = qty * close
-                        if not risk_mgr.check_pretrade(pd.Timestamp.now(), portfolio, ticker, order_notional):
-                            print(f"  {ticker}: 리스크 한도 초과 -> HOLD")
-                            add_auto_decision(
-                                db, user_id, ticker, "HOLD", "RISK_LIMIT_EXCEEDED",
-                                f"주문금액 {int(order_notional):,}원이 리스크 한도(종목당/1회 주문/전체 노출 "
-                                "상한)를 초과",
-                                ai_signal=signal, ai_confidence=confidence,
-                                strategy_id=strategies[ticker].__class__.__name__, price=close,
-                            )
-                            continue
-
-                        # 주문 실행 + 재시도
-                        MAX_RETRY = 3
-                        RETRY_DELAY = 10
-                        order_status = "FAILED"
-
-                        for attempt in range(MAX_RETRY):
-                            try : 
-                                if not broker:
-                                    raise Exception("KIS broker is not configured")
-                                if not kis_is_mock() and not kis_real_trading_enabled():
-                                    raise Exception("Set KIS_REAL_TRADING_ENABLED=true to allow real-account orders")
-
-                                resp = broker.create_order(
-                                    symbol=ticker,
-                                    side=order_signal,
-                                    qty=qty,
-                                    order_type="market",
-                                )
-                                if resp.get("rt_cd") != "0":
-                                    raise Exception(resp.get("msg1"))
-
-                                order_status = "FILLED"
-                                print(f"  {ticker}: {order_signal} 체결 | qty={qty} | {qty*close:,}원")
-                                break
-                            except Exception as e : 
-                                print(f"   {ticker}: 주문 실패 ({attempt+1}/{MAX_RETRY}) - {e}")
-                                if attempt < MAX_RETRY - 1:
-                                    await asyncio.sleep(RETRY_DELAY)
-                                else:
-                                    print(f"  {ticker}: 최종 실패")
-
-                        if order_status == "FILLED":
-                            apply_fill(portfolio, ticker, order_signal, qty, close)
-
-                        db.add(TradeLog(
-                                user_id=user_id,
-                                ticker=ticker,
-                                side=order_signal,
-                                qty=int(qty),
-                                price=close,
-                                amount=int(qty * close),
-                                ai_signal=signal,
-                                ai_confidence=confidence,
+                                db, user_id, ticker, "SKIP", "NO_MARKET_PRICE",
+                                "실시간 시세를 받지 못해 자동매매 판단을 건너뜀",
                                 strategy_id=strategies[ticker].__class__.__name__,
-                                status = order_status, 
-                        ))
-                        add_auto_decision(
-                            db, user_id, ticker, "ORDER_SUBMITTED", order_status,
-                            f"{order_signal} 주문 시도 qty={int(qty)} amount={int(qty * close)}",
-                            ai_signal=signal, ai_confidence=confidence,
-                            strategy_id=strategies[ticker].__class__.__name__, price=close,
+                            )
+                            continue
+
+                        close = market["price"]
+                        high = market["high"]
+                        low = market["low"]
+                        volume = market["volume"]
+
+                        row = pd.Series(
+                            {"close": close, "high": high, "low": low, "volume": volume},
+                            name=pd.Timestamp.now(),
                         )
-                        print(f"{ticker}: {order_signal} | qty = {qty} | {qty*close: ,}원")
-                            # TODO: KIS API 주문
+
+                        # AI 추론
+                        pred_map = {p["ticker"] : p for p in predictions}
+                        signal = pred_map[ticker]["signal"]
+                        confidence = pred_map[ticker]["confidence"]
+                        print(f"  {ticker}: AI {signal} | confidence={confidence:.3f}")
+
+                        if confidence < config.min_confidence:
+                            detail = f"AI 확신도 {confidence:.3f}가 최소 기준 {config.min_confidence:.3f}보다 낮음"
+                            print(f"  {ticker}: 확신도 부족 ({confidence:.3f} < {config.min_confidence:.3f}) -> SKIP")
+                            add_auto_decision(
+                                db, user_id, ticker, "SKIP", "LOW_CONFIDENCE", detail,
+                                ai_signal=signal, ai_confidence=confidence,
+                                strategy_id=strategies[ticker].__class__.__name__, price=close,
+                            )
+                            continue
+                        # if signal == "HOLD":
+                        #     print(f"  {ticker}: AI 관망 부족 -> HOLD")
+                        #     continue
+
+                        # 전략 필터 (봉 데이터 자동 누적됨)
+                        orders = strategies[ticker].generate_orders(row, portfolio)
+                        if not orders:
+                            print(f"  {ticker}: 전략 조건 미충족 -> HOLD")
+                            add_auto_decision(
+                                db, user_id, ticker, "HOLD", "STRATEGY_CONDITION_NOT_MET",
+                                "AI 확신도는 기준을 통과했지만 전략이 BUY/SELL 주문 신호를 만들지 않음",
+                                ai_signal=signal, ai_confidence=confidence,
+                                strategy_id=strategies[ticker].__class__.__name__, price=close,
+                            )
+                            continue
+
+                        # AI + 전략 일치 시 실행
+                        for order in orders:
+                            order_signal = "BUY" if order.side.value == "BUY" else "SELL"
                         
+                           # 매수: allocation 비중 기반 수량
+                            if order_signal == "BUY" and ticker in allocation_map:
+                                a = allocation_map[ticker]
+
+                                if signal == order_signal:
+                                    qty = a["amount"] // close
+                                elif signal == "HOLD":
+                                    qty = (a["amount"] // close) // 2 
+                                else:
+                                    detail = f"AI 신호 {signal}와 전략 신호 {order_signal}가 일치하지 않음"
+                                    print(f"  {ticker}: AI({signal})와 전략({order_signal}) 불일치 -> HOLD")
+                                    add_auto_decision(
+                                        db, user_id, ticker, "HOLD", "AI_STRATEGY_MISMATCH", detail,
+                                        ai_signal=signal, ai_confidence=confidence,
+                                        strategy_id=strategies[ticker].__class__.__name__, price=close,
+                                    )
+                                    continue
+
+                            # 매도: 보유 수량 기반
+                            elif order_signal == "SELL":
+                                pos = portfolio.positions.get(ticker)
+                                if not pos or pos.qty <= 0:
+                                    print(f"  {ticker}: 전략 SELL 신호지만 보유 수량 없음 -> HOLD")
+                                    add_auto_decision(
+                                        db, user_id, ticker, "HOLD", "NO_POSITION_TO_SELL",
+                                        "전략은 SELL 신호를 만들었지만 포트폴리오에 보유 수량이 없음",
+                                        ai_signal=signal, ai_confidence=confidence,
+                                        strategy_id=strategies[ticker].__class__.__name__, price=close,
+                                    )
+                                    continue
+
+                                if signal == order_signal:
+                                    qty = pos.qty
+                                elif signal == "HOLD":
+                                    qty = pos.qty // 2
+                                else:
+                                    detail = f"AI 신호 {signal}와 전략 신호 {order_signal}가 일치하지 않음"
+                                    print(f"  {ticker}: AI({signal})와 전략({order_signal}) 불일치 -> HOLD")
+                                    add_auto_decision(
+                                        db, user_id, ticker, "HOLD", "AI_STRATEGY_MISMATCH", detail,
+                                        ai_signal=signal, ai_confidence=confidence,
+                                        strategy_id=strategies[ticker].__class__.__name__, price=close,
+                                    )
+                                    continue
+
+                            else:
+                                print(f"  {ticker}: 전략 {order_signal} 신호지만 매수 배분 없음 -> HOLD")
+                                add_auto_decision(
+                                    db, user_id, ticker, "HOLD", "NO_BUY_ALLOCATION",
+                                    "전략이 BUY 신호를 만들었지만 AI 매수 배분 대상에 포함되지 않음",
+                                    ai_signal=signal, ai_confidence=confidence,
+                                    strategy_id=strategies[ticker].__class__.__name__, price=close,
+                                )
+                                continue
+
+                            if qty <= 0:
+                                print(f"  {ticker}: 주문 가능 수량 0 -> HOLD")
+                                add_auto_decision(
+                                    db, user_id, ticker, "HOLD", "ZERO_ORDER_QUANTITY",
+                                    "배정 금액과 현재가 기준 주문 가능 수량이 0주",
+                                    ai_signal=signal, ai_confidence=confidence,
+                                    strategy_id=strategies[ticker].__class__.__name__, price=close,
+                                )
+                                continue
+
+                            order_notional = qty * close
+                            if not risk_mgr.check_pretrade(pd.Timestamp.now(), portfolio, ticker, order_notional):
+                                print(f"  {ticker}: 리스크 한도 초과 -> HOLD")
+                                add_auto_decision(
+                                    db, user_id, ticker, "HOLD", "RISK_LIMIT_EXCEEDED",
+                                    f"주문금액 {int(order_notional):,}원이 리스크 한도(종목당/1회 주문/전체 노출 "
+                                    "상한)를 초과",
+                                    ai_signal=signal, ai_confidence=confidence,
+                                    strategy_id=strategies[ticker].__class__.__name__, price=close,
+                                )
+                                continue
+
+                            # 주문 실행 + 재시도
+                            MAX_RETRY = 3
+                            RETRY_DELAY = 10
+                            order_status = "FAILED"
+
+                            for attempt in range(MAX_RETRY):
+                                try : 
+                                    if not broker:
+                                        raise Exception("KIS broker is not configured")
+                                    if not kis_is_mock() and not kis_real_trading_enabled():
+                                        raise Exception("Set KIS_REAL_TRADING_ENABLED=true to allow real-account orders")
+
+                                    resp = broker.create_order(
+                                        symbol=ticker,
+                                        side=order_signal,
+                                        qty=qty,
+                                        order_type="market",
+                                    )
+                                    if resp.get("rt_cd") != "0":
+                                        raise Exception(resp.get("msg1"))
+
+                                    order_status = "FILLED"
+                                    print(f"  {ticker}: {order_signal} 체결 | qty={qty} | {qty*close:,}원")
+                                    break
+                                except Exception as e : 
+                                    print(f"   {ticker}: 주문 실패 ({attempt+1}/{MAX_RETRY}) - {e}")
+                                    if attempt < MAX_RETRY - 1:
+                                        await asyncio.sleep(RETRY_DELAY)
+                                    else:
+                                        print(f"  {ticker}: 최종 실패")
+
+                            if order_status == "FILLED":
+                                apply_fill(portfolio, ticker, order_signal, qty, close)
+
+                            db.add(TradeLog(
+                                    user_id=user_id,
+                                    ticker=ticker,
+                                    side=order_signal,
+                                    qty=int(qty),
+                                    price=close,
+                                    amount=int(qty * close),
+                                    ai_signal=signal,
+                                    ai_confidence=confidence,
+                                    strategy_id=strategies[ticker].__class__.__name__,
+                                    status = order_status, 
+                            ))
+                            add_auto_decision(
+                                db, user_id, ticker, "ORDER_SUBMITTED", order_status,
+                                f"{order_signal} 주문 시도 qty={int(qty)} amount={int(qty * close)}",
+                                ai_signal=signal, ai_confidence=confidence,
+                                strategy_id=strategies[ticker].__class__.__name__, price=close,
+                            )
+                            print(f"{ticker}: {order_signal} | qty = {qty} | {qty*close: ,}원")
+                                # TODO: KIS API 주문
+                        
+                    except Exception as e:
+                        print(f"  {ticker}: 처리 중 예외 발생, 다음 종목으로 진행: {e}")
+                        try:
+                            add_auto_decision(db, user_id, ticker, "SKIP", "UNEXPECTED_ERROR", str(e)[:500])
+                        except Exception:
+                            pass
+                    finally:
+                        db.commit()
                 db.commit()
             finally :
                 db.close()

@@ -41,6 +41,11 @@ def allocate_portfolio(
 
     # 3. 가중 분배 (보정된 confidence 기준)
     total_conf = sum(b["adj_confidence"] for b in buys)
+    if total_conf <= 0:
+        # min_confidence=0으로 설정하면 confidence 0.0짜리 BUY도 buys에 들어올 수 있다. 신뢰도로
+        # 비중을 나눌 수 없는 상태라, 0으로 나누는 대신 배분 없음으로 처리한다(2026-10-02 통합 감사 --
+        # 이 ZeroDivisionError가 trading_loop 전체를 조용히 죽였다).
+        return []
     investable = total_capital * (1 - cash_reserve)
 
     for b in buys:
