@@ -127,7 +127,7 @@ def receive_once_callback(
     parsed_results = []
     for result in payload.results:
         parsed = parse_prediction(result)
-        parsed["interpretability"] = result.interpretability
+        parsed["interpretability"] = result.interpretability or {}
         parsed["pred_str"] = result.pred_str
         parsed["prob_buy"] = result.prob_buy
         parsed["prob_hold"] = result.prob_hold

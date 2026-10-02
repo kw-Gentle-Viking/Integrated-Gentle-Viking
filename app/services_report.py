@@ -66,6 +66,9 @@ def _format_unknown_past(features: list) -> str:
 
 def _format_known_future(features: list) -> str:
     """known_future 이벤트 피처 텍스트 변환"""
+    if not features:
+        return "특별한 이벤트 없음 (금통위 · FOMC · 선물만기일 해당 없음)"
+
     events = []
     has_event = False
 
@@ -117,7 +120,7 @@ def _get_direction_emoji(pred_str: str, max_prob: float) -> str:
 def build_user_prompt(result: dict, ticker_name: str = "") -> str:
     """AI 추론 결과로 Gemini 프롬프트 생성"""
     ticker = result["ticker"]
-    interp = result.get("interpretability", {})
+    interp = result.get("interpretability") or {}
     top_features = interp.get("top_features", {})
 
     unknown_past = _format_unknown_past(top_features.get("unknown_past", []))
