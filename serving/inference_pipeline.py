@@ -43,7 +43,7 @@ logger = logging.getLogger(__name__)
 SERVING_DIR = os.path.dirname(os.path.abspath(__file__))
 TICKERS_FILE = os.environ.get("SERVING_TICKERS_FILE", os.path.join(SERVING_DIR, "active_tickers.json"))
 BACKEND_WEBHOOK_URL = os.environ.get("BACKEND_WEBHOOK_URL", "")
-AI_SERVER_API_KEY = os.environ.get("AI_SERVER_API_KEY", "")
+AI_SERVER_API_KEY = os.environ.get("AI_SERVER_API_KEY", "dev-ai-key")  # 백엔드 기본값(dev-ai-key)과 통일 (2026-10-02 통합 감사)
 
 
 def load_active_tickers(tickers_file: str = TICKERS_FILE) -> list[str]:
@@ -100,7 +100,7 @@ def push_results(results: list[dict], webhook_url: str = BACKEND_WEBHOOK_URL) ->
         "results": results,
     }
     headers = {}
-    api_key = os.environ.get("AI_SERVER_API_KEY", "")
+    api_key = os.environ.get("AI_SERVER_API_KEY", "dev-ai-key")  # 백엔드 기본값과 통일 (2026-10-02 통합 감사)
     if api_key:
         headers["X-API-Key"] = api_key
     resp = requests.post(f"{webhook_url.rstrip('/')}/ai/realtime", json=payload, timeout=15, headers=headers)

@@ -98,7 +98,9 @@ def test_push_results_sends_api_key_header_when_configured(monkeypatch):
     assert captured["headers"]["X-API-Key"] == "test-key-123"
 
 
-def test_push_results_omits_api_key_header_when_not_configured(monkeypatch):
+def test_push_results_falls_back_to_dev_key_when_not_configured(monkeypatch):
+    # 2026-10-02 통합 감사: 이 쪽은 ""(헤더 없음), 백엔드는 "dev-ai-key"가 기본값이라 서로 설정을
+    # 빠뜨리면 항상 401이 났다. 양쪽 기본값을 "dev-ai-key"로 통일해 설정을 빠뜨려도 맞는다.
     monkeypatch.delenv("AI_SERVER_API_KEY", raising=False)
     captured = {}
 
@@ -112,4 +114,4 @@ def test_push_results_omits_api_key_header_when_not_configured(monkeypatch):
 
     monkeypatch.setattr(pipeline.requests, "post", fake_post)
     pipeline.push_results([{"ticker": "005930"}], webhook_url="http://example.com")
-    assert "X-API-Key" not in captured["headers"]
+    assert captured["headers"]["X-API-Key"] == "dev-ai-key"
