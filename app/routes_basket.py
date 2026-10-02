@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
+from app.ai_universe import is_ai_covered_ticker
 from app.db import get_db
 from app.dependencies import get_current_user
 from app.models import User, Basket
@@ -29,6 +30,13 @@ def add_to_basket(
 
     if exists:
         raise HTTPException(status_code=409, detail="이미 바구니에 있는 종목입니다")
+
+    if not is_ai_covered_ticker(payload.ticker):
+        raise HTTPException(
+            status_code=400,
+            detail=f"{payload.ticker_name}({payload.ticker})은(는) AI 모델이 분석하지 않는 종목이라 "
+                    "자동매매 바구니에 담을 수 없습니다",
+        )
 
     item = Basket(
         user_id=current_user.id,

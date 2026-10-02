@@ -3,6 +3,7 @@ import asyncio
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
+from app.ai_universe import is_ai_covered_ticker
 from app.db import get_db,SessionLocal
 from app.dependencies import get_current_user
 from app.models import User,TradeLog,Basket,LiveCandle,ManualTradeLock,AutoTradeDecision
@@ -71,15 +72,19 @@ def get_balance() -> int:
         return 10_000_000
 
 
-def get_auto_trade_basket_items(db: Session, user_id: int) -> tuple[list[Basket], list[str]]:
+def get_auto_trade_basket_items(db: Session, user_id: int) -> tuple[list[Basket], list[str], list[str]]:
     items = db.query(Basket).filter(Basket.user_id == user_id).all()
     manual_tickers = {
         lock.ticker
         for lock in db.query(ManualTradeLock).filter(ManualTradeLock.user_id == user_id).all()
     }
-    auto_items = [item for item in items if item.ticker not in manual_tickers]
-    excluded = [item.ticker for item in items if item.ticker in manual_tickers]
-    return auto_items, excluded
+    # AI가 커버하지 않는 종목(코스닥 등)은 ai_client.predict()가 confidence-0 HOLD나(설정에 따라) 무작위
+    # 신호로 치환해버리므로, 자동매매 대상에서 먼저 걸러낸다(2026-10-02 통합 감사에서 발견).
+    excluded_unsupported = [item.ticker for item in items if not is_ai_covered_ticker(item.ticker)]
+    remaining = [item for item in items if item.ticker not in set(excluded_unsupported)]
+    auto_items = [item for item in remaining if item.ticker not in manual_tickers]
+    excluded_manual = [item.ticker for item in remaining if item.ticker in manual_tickers]
+    return auto_items, excluded_manual, excluded_unsupported
 
 
 def sync_request_basket(db: Session, user_id: int, payload) -> None:
@@ -637,11 +642,11 @@ async def start_trading(
         return {"status": "ALREADY_RUNNING", "message": "이미 자동매매 실행 중"}
 
     sync_request_basket(db, user_id, payload)
-    items, excluded_manual_tickers = get_auto_trade_basket_items(db, user_id)
-    if not items and excluded_manual_tickers:
+    items, excluded_manual_tickers, excluded_unsupported_tickers = get_auto_trade_basket_items(db, user_id)
+    if not items and (excluded_manual_tickers or excluded_unsupported_tickers):
         raise HTTPException(
             status_code=400,
-            detail=no_auto_basket_message(excluded_manual_tickers),
+            detail=no_auto_basket_message(excluded_manual_tickers, excluded_unsupported_tickers),
         )
     if not items:
         raise HTTPException(status_code=400, detail="바구니가 비어있습니다")
@@ -649,6 +654,8 @@ async def start_trading(
     tickers = [item.ticker for item in items]
     if excluded_manual_tickers:
         print(f"[User {user_id}] 직접매매 종목 자동매매 제외: {excluded_manual_tickers}")
+    if excluded_unsupported_tickers:
+        print(f"[User {user_id}] AI 미지원 종목 자동매매 제외: {excluded_unsupported_tickers}")
     print(f"[User {user_id}] 자동매매 대상 종목: {tickers}")
 
     warmup_requests = []
@@ -697,6 +704,7 @@ async def start_trading(
             "status": "RUNNING",
             "tickers": tickers,
             "excluded_manual_tickers": excluded_manual_tickers,
+            "excluded_unsupported_tickers": excluded_unsupported_tickers,
             "strategies": resolved_strategies,
             "message": "데모 자동매매 시작: AI 서버에 START 커맨드를 전달했습니다.",
         }
@@ -717,6 +725,7 @@ async def start_trading(
         "status": "RUNNING",
         "tickers": tickers,
         "excluded_manual_tickers": excluded_manual_tickers,
+        "excluded_unsupported_tickers": excluded_unsupported_tickers,
         "strategies": resolved_strategies,
         "message": "자동매매 시작 (5분 주기)",
     }
@@ -768,11 +777,11 @@ async def execute_once(
     current_user: User = Depends(get_current_user),
 ):
     sync_request_basket(db, current_user.id, payload)
-    items, excluded_manual_tickers = get_auto_trade_basket_items(db, current_user.id)
-    if not items and excluded_manual_tickers:
+    items, excluded_manual_tickers, excluded_unsupported_tickers = get_auto_trade_basket_items(db, current_user.id)
+    if not items and (excluded_manual_tickers or excluded_unsupported_tickers):
         raise HTTPException(
             status_code=400,
-            detail=no_auto_basket_message(excluded_manual_tickers),
+            detail=no_auto_basket_message(excluded_manual_tickers, excluded_unsupported_tickers),
         )
     if not items:
         raise HTTPException(status_code=400, detail="바구니가 비어있습니다")
@@ -798,6 +807,7 @@ async def execute_once(
         "job_id": job_id,
         "tickers": tickers,
         "excluded_manual_tickers": excluded_manual_tickers,
+        "excluded_unsupported_tickers": excluded_unsupported_tickers,
         "callback_url": f"{base_url}/ai/callback",
         "message": "AI 서버에 1회 분석/실행 커맨드를 전달했습니다. AI 서버가 결과를 콜백하면 리포트와 자동매매 판단에 반영됩니다.",
     }

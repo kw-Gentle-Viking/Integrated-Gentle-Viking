@@ -17,7 +17,13 @@ def trade_log_to_dict(log) -> dict:
     }
 
 
-def no_auto_basket_message(excluded_manual_tickers: list[str]) -> str:
-    """직접매매 종목만 있을 때의 400 detail. 객체가 아니라 문자열이어야 프론트가 그대로 보여줄 수 있다."""
-    tickers = ", ".join(excluded_manual_tickers)
-    return f"자동매매 가능한 바구니 종목이 없습니다. 직접매매 종목은 자동매매에서 제외됩니다. (제외: {tickers})"
+def no_auto_basket_message(excluded_manual_tickers: list[str], excluded_unsupported_tickers: list[str] | None = None) -> str:
+    """자동매매 가능한 바구니 종목이 하나도 없을 때의 400 detail. 객체가 아니라 문자열이어야 프론트가
+    그대로 보여줄 수 있다."""
+    reasons = []
+    if excluded_manual_tickers:
+        reasons.append(f"직접매매 종목이라 제외: {', '.join(excluded_manual_tickers)}")
+    if excluded_unsupported_tickers:
+        reasons.append(f"AI가 분석하지 않는 종목이라 제외: {', '.join(excluded_unsupported_tickers)}")
+    detail = " / ".join(reasons) if reasons else "바구니가 비어있습니다"
+    return f"자동매매 가능한 바구니 종목이 없습니다. ({detail})"
