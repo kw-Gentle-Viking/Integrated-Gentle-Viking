@@ -119,7 +119,7 @@ async function fetchPrediction(code: string) {
   return normalizePrediction((await res.json()) as BackendPrediction);
 }
 
-async function isOnceJobDone(jobId: string) {
+export async function isOnceJobDone(jobId: string) {
   const res = await apiFetch(`${API_BASE}/ai/once/${encodeURIComponent(jobId)}`);
   return res.ok; // 콜백 전에는 404
 }

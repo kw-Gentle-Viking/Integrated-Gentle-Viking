@@ -8,6 +8,7 @@ import PortfolioSummaryCards from "@/components/portfolio/PortfolioSummaryCards"
 import PortfolioTable from "@/components/portfolio/PortfolioTable";
 import { StockListItem, useStockList } from "@/lib/stock-list/StockListContext";
 import { apiFetch } from "@/lib/signup/auth";
+import { isOnceJobDone } from "@/lib/ai/predictionJobStore";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -22,6 +23,7 @@ type TradeLog = {
   ai_signal: string;
   ai_confidence: number;
   strategy_id: string;
+  status?: string;
   created_at: string;
 };
 
@@ -46,6 +48,7 @@ type BackendPrediction = {
   prob_sell?: number;
   trade_datetime?: string;
   model_version?: string;
+  stale?: boolean;
 };
 
 type PortfolioPrediction = {
@@ -58,6 +61,7 @@ type PortfolioPrediction = {
   probSell: number;
   tradeDatetime?: string;
   modelVersion?: string;
+  stale?: boolean;
   hasResult: boolean;
   error?: string;
 };
@@ -67,6 +71,8 @@ type TradeActionPayload = {
   detail?: string;
   job_id?: string;
   tickers?: string[];
+  excluded_manual_tickers?: string[];
+  excluded_unsupported_tickers?: string[];
 };
 
 type MarketStatus = {
@@ -233,6 +239,7 @@ export default function PortfolioPage() {
               probSell: toPercent(data.prob_sell),
               tradeDatetime: data.trade_datetime,
               modelVersion: data.model_version,
+              stale: data.stale,
               hasResult: true,
             } satisfies PortfolioPrediction;
           } catch (error) {
@@ -280,6 +287,13 @@ export default function PortfolioPage() {
 
       if (decisionsRes.ok) {
         setTradeDecisions((await decisionsRes.json()) as AutoTradeDecision[]);
+      }
+
+      // 셋 중 하나라도 비정상 응답(401/500 등)이면 화면은 이전 상태를 그대로 보여주면서 아무 알림도
+      // 없이 넘어갔다 -- 사용자는 "자동매매 상태를 못 불러왔다"는 사실 자체를 알 수 없었다(2026-10-02 통합 감사).
+      if (!statusRes.ok || !historyRes.ok || !decisionsRes.ok) {
+        console.error("자동매매 상태 조회 실패", statusRes.status, historyRes.status, decisionsRes.status);
+        setTradeError("자동매매 상태를 최신으로 불러오지 못했습니다. 화면이 실제와 다를 수 있습니다.");
       }
     } catch (error) {
       console.error(error);
@@ -347,10 +361,11 @@ export default function PortfolioPage() {
             ticker: stock.code,
             ticker_name: stock.name,
           })),
-          ticker_strategies: cartStocks.map((stock) => ({
-            ticker: stock.code,
-            strategy_id: "rsi_reversal",
-          })),
+          // 전략을 고르는 UI가 아직 없어서 종목별로 보낼 실제 전략 ID가 없다. "rsi_reversal" 같은
+          // 가짜 placeholder를 보내면 백엔드 STRATEGY_CONFIG에 없는 값이라 매번 조용히 conservative로
+          // 대체돼 사용자가 그 사실을 알 길이 없었다(2026-10-02 통합 감사). ticker_strategies를 비워
+          // 보내면 백엔드가 자기 기본 전략(ultra_safe)을 그대로 쓴다.
+          ticker_strategies: [],
         }),
       });
 
@@ -366,6 +381,11 @@ export default function PortfolioPage() {
         let hasPrediction = false;
         for (let attempt = 0; attempt < 20; attempt += 1) {
           await delay(3000);
+          // job_id로 ONCE 콜백 도착(GET /ai/once/{job_id} 200)을 먼저 확인한다 -- 그냥
+          // /ai/predictions/{ticker}를 바로 조회하면 콜백 도착 전 직전 5분 주기 push나 과거 ONCE
+          // 결과를 "새로 받은 결과"로 오인할 수 있다(lib/ai/predictionJobStore.ts와 같은 문제,
+          // 2026-10-02 통합 감사).
+          if (payload.job_id && !(await isOnceJobDone(payload.job_id))) continue;
           hasPrediction = await loadPortfolioPredictions();
           if (hasPrediction) break;
         }
@@ -541,6 +561,11 @@ export default function PortfolioPage() {
                               <span className="text-xs font-black text-slate-500">
                                 확신도 {prediction.hasResult ? `${prediction.confidence.toFixed(1)}%` : "-"}
                               </span>
+                              {prediction.stale ? (
+                                <span className="rounded-full border border-amber-300 bg-amber-50 px-3 py-1 text-xs font-black text-amber-600">
+                                  오래된 신호
+                                </span>
+                              ) : null}
                             </div>
                             <div className="grid grid-cols-3 gap-2 text-xs font-black">
                               <div className="rounded-lg bg-rose-50 px-3 py-2 text-rose-600">매수 {prediction.probBuy.toFixed(1)}%</div>
@@ -597,10 +622,17 @@ export default function PortfolioPage() {
                     {tradeLogs.slice(0, 8).map((log, index) => (
                       <div key={`${log.created_at}-${log.ticker}-${index}`} className="grid gap-3 px-5 py-4 text-sm md:grid-cols-[1fr_auto_auto_auto] md:items-center">
                             <div>
-                              <p className="font-black text-slate-950">{log.ticker}</p>
+                              <p className="font-black text-slate-950">
+                                {log.ticker}
+                                {log.status === "FAILED" ? (
+                                  <span className="ml-2 rounded-full border border-rose-300 bg-rose-50 px-2 py-0.5 text-xs font-black text-rose-600">
+                                    실패
+                                  </span>
+                                ) : null}
+                              </p>
                               <p className="mt-0.5 text-xs font-bold text-slate-400">{formatDate(log.created_at)} · {log.strategy_id}</p>
                             </div>
-                            <p className={`font-black ${log.side === "BUY" ? "text-rose-500" : "text-blue-500"}`}>{log.side}</p>
+                            <p className={`font-black ${log.status === "FAILED" ? "text-slate-400 line-through" : log.side === "BUY" ? "text-rose-500" : "text-blue-500"}`}>{log.side}</p>
                             <p className="font-bold text-slate-600">{log.qty.toLocaleString("ko-KR")}주 · {formatWon(log.price)}</p>
                             <p className="text-right text-xs font-bold text-slate-400">AI {log.ai_signal} {formatConfidence(log.ai_confidence)}</p>
                       </div>
