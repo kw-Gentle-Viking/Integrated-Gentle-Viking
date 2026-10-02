@@ -1,5 +1,16 @@
-tft-torch/
+tft-torch
 __pycache__/
 *.pyc
 .env
 .worktrees/
+data_collection/.kis_token_cache.json
+features/artifacts/
+training/artifacts/
+training/threshold.json
+training/run_derive_threshold.log
+wandb/
+serving/active_tickers.json
+serving/*.log
+
+training/threshold_vn.json
+.claude/settings.local.json

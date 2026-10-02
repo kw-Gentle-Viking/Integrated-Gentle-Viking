@@ -20,9 +20,14 @@
 - 2단계 기간: 2019-01-02~현재 전체(레버리지 국면 포함)
 - 날짜 기준 시계열 분리만 사용, 랜덤 셔플 금지
 - 클리핑/스케일링은 항상 해당 단계의 train split에서만 fit, val/test/서빙엔 그대로 적용(재계산 금지)
+- **결측치는 기본적으로 행을 버리지 말고 직전 값으로 채운다(forward-fill)** — 종목/시계열 자체는 계속 존재하는데 그 시점 값만 없는 경우(휴장, 일시적 미수집 등)가 대상. "0으로 채우기"는 결측 자체가 의미 있는 정보인 경우(예: 적자기업의 PER/PBR — 단, 해당 피처는 현재 스코프에서 제외됨)에만 예외적으로 사용. 종목이 그 시점에 아예 존재하지 않는 경우(상장 전/상장폐지 후)는 ffill 대상이 아니라 정당한 제외
 - 평가 핵심 지표: Macro F1(그 외 Accuracy/클래스별 P·R·F1/Confusion Matrix/MCC 병기), 1단계와 2단계(레버리지 국면) 성능은 항상 분리 리포트
 - encoder 길이 60거래일 고정
 - 신규 인프라(TorchServe, BentoML 등) 도입 금지 — 기존 `api_server.py`/crontab 패턴 재사용
+- 금액/거래대금 관련 새 API 응답 필드는 대량 백필 전에 반드시 1건 샘플로 단위(원 vs 백만원 등)를 수동 확인한다 — 기존 KIS 필드(`hts_avls`, `*_tr_pbmn` 등)는 이미 pipeline_overview.md에 배율이 문서화돼 있지만, 처음 다루는 API(레버리지 ETF/ETN NAV·AUM 등)는 확인된 바 없음
+- **모든 확인된(또는 확인이 필요한) 단위는 `docs/data_units.md`에 기록한다** — 테이블.컬럼, 소스 API 필드, 원본 단위, 배율, 확인 근거를 표에 남길 것. 새 금액/수량 필드를 다루는 태스크는 이 문서를 갱신하고 커밋에 포함시킨다
+- **모든 원화 금액 필드는 raw 원(₩) 단위로 통일한다** (백만원/천원 단위로 오는 API는 반드시 명시적으로 환산 — 기존 프로젝트에서도 이 원칙을 지켰음). 가장 확실한 방법은 API 제공처 문서·샘플 응답에서 그 필드가 정확히 어떤 단위로 오는지 먼저 확인하는 것(위 항목의 단위 검증과 동일 원칙). 단, WTI 유가·금값·S&P500 등 외화/지수 표시 매크로 지표는 원화 환산 대상이 아니다 — 수익률/변동폭으로만 피처화하므로 원래 통화·단위 그대로 사용
+- 데이터 정합성은 클리핑(이상치 처리, Task 11)과 별개 문제 — 독립 소스 간 교차검증(예: 두 가지 방식으로 계산한 시가총액 비교), 값 범위, 결측률, 종목별 거래일수 갭 검증을 Task 10에서 수행하고 통과해야 다음 단계로 진행
 
 ---
 
@@ -139,6 +144,12 @@ CREATE TABLE IF NOT EXISTS intraday_1min (
     open NUMERIC, high NUMERIC, low NUMERIC, close NUMERIC, volume BIGINT,
     PRIMARY KEY (ticker, datetime)
 );
+
+CREATE TABLE IF NOT EXISTS labels (
+    ticker VARCHAR(6) NOT NULL, trade_date DATE NOT NULL,
+    next_day_return NUMERIC, label SMALLINT,  -- 0=매수, 1=관망, 2=매도, NULL=마지막 거래일(라벨 없음)
+    PRIMARY KEY (ticker, trade_date)
+);
 ```
 
 - [ ] **Step 2: DB 생성/스키마 적용 스크립트 작성**
@@ -195,7 +206,7 @@ def test_schema_defines_all_required_tables():
         "ticker_universe", "price_daily", "daily_valuation", "investor_flow_daily",
         "market_index_daily", "market_global", "sector_daily_ohlcv", "stock_events",
         "calendar", "market_events", "leverage_products", "leverage_daily",
-        "vi_events", "intraday_5min", "intraday_1min",
+        "vi_events", "intraday_5min", "intraday_1min", "labels",
     ]
     found = set(re.findall(r"CREATE TABLE IF NOT EXISTS (\w+)", ddl))
     missing = [t for t in required_tables if t not in found]
@@ -656,10 +667,14 @@ Expected: PASS (3 tests)
 Run: `nohup /home/user/miniconda3/envs/kis_collector/bin/python data_collection/run_daily_price_backfill.py >> backfill_daily_price.log 2>&1 &` (저녁~새벽 시간대)
 Expected: `SELECT ticker, count(*) FROM price_daily GROUP BY ticker`로 200종목 전부 약 1700+ 행(2019-01-02~현재 영업일수) 확인
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 6: `turnover` 단위 확인 후 `docs/data_units.md` 갱신**
+
+`docs/data_units.md`의 "미확인" 표에 `price_daily.turnover`가 없다면(이미 "raw 원으로 추정"으로 기재돼 있음), 백필된 실제 값으로 검증한다: 임의 종목·날짜 하나를 골라 `turnover`가 대략 `close_price × volume`(같은 자릿수)과 맞아떨어지는지 확인. 맞으면 "확인된 단위" 표로 이동하고 확인 근거(실제 검증한 종목/날짜)를 적는다. 자릿수가 안 맞으면 배율을 역산해서 `parse_daily_price_response()`(Step 3)를 수정하고 4-5단계를 재실행한다.
+
+- [ ] **Step 7: Commit**
 
 ```bash
-git add data_collection/backfill_daily_price.py data_collection/test_backfill_daily_price.py data_collection/run_daily_price_backfill.py
+git add data_collection/backfill_daily_price.py data_collection/test_backfill_daily_price.py data_collection/run_daily_price_backfill.py docs/data_units.md
 git commit -m "feat: backfill daily OHLCV for top-200 universe (2019-01-02~present)"
 ```
 
@@ -797,10 +812,14 @@ Expected: PASS (3 tests)
 
 Expected: `daily_valuation`, `investor_flow_daily`, `market_index_daily`(KOSPI `0001`/KOSDAQ `1001`) 테이블에 각 종목·거래일별 데이터 적재 확인
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 6: `docs/data_units.md` 확인**
+
+이 태스크가 다루는 `hts_avls`(×1,000,000), `prsn/frgn/orgn_ntby_tr_pbmn`(×1,000,000) 배율은 이미 `docs/data_units.md`의 "확인된 단위" 표에 기재돼 있음(원본 캡스톤 문서 기반) — 백필된 실제 값이 그 문서와 자릿수가 맞는지만 샘플 1건으로 대조 확인하고, 문제 없으면 그대로 둔다. 어긋나면 표를 갱신하고 파싱 함수를 수정한다.
+
+- [ ] **Step 7: Commit**
 
 ```bash
-git add data_collection/backfill_kis_fundamentals.py data_collection/test_backfill_kis_fundamentals.py
+git add data_collection/backfill_kis_fundamentals.py data_collection/test_backfill_kis_fundamentals.py docs/data_units.md
 git commit -m "feat: backfill valuation, investor flow, and index data"
 ```
 
@@ -929,7 +948,7 @@ git commit -m "feat: backfill macro data from yfinance and FRED"
 
 **Interfaces:**
 - Consumes: `KisClient` (Task 2)
-- Produces: `classify_dart_event(report_name: str) -> str | None` (키워드 → 이벤트 타입 매핑, 원본 `init_dart.py` 로직 계승), `build_calendar_rows(start: str, end: str, short_selling_ban_periods: list[tuple[str, str]]) -> list[dict]`
+- Produces: `classify_dart_event(report_name: str) -> str | None` (키워드 → 이벤트 타입 매핑, 원본 `init_dart.py` 로직 계승), `build_calendar_rows(start: str, end: str, short_selling_ban_periods: list[tuple[str, str]]) -> list[dict]`, `parse_dart_reports(raw_reports: list[dict], ticker: str) -> list[dict]`, `upsert_stock_events(dsn: str, rows: list[dict]) -> None`, `parse_sector_daily_response(raw: dict, sector_code: str) -> list[dict]`, `upsert_sector_daily_ohlcv(dsn: str, rows: list[dict]) -> None`, `upsert_calendar(dsn: str, rows: list[dict]) -> None`
 
 - [ ] **Step 1: 실패하는 테스트 작성**
 
@@ -1017,7 +1036,131 @@ def build_calendar_rows(start: str, end: str,
 Run: `/home/user/miniconda3/envs/kis_collector/bin/python -m pytest data_collection/test_backfill_dart_calendar_sector.py -v`
 Expected: PASS (4 tests)
 
-- [ ] **Step 5: 실행** — DART(`OpenDartReader`, KIS 아님)로 200종목 2019~현재 공시 수집(`stock_events`), 캘린더(`calendar`/`market_events`, 공휴일 라이브러리 + 공매도 금지 기간 하드코딩: 2020-03-16~2021-05-02, 2023-11-06~2099-12-31), 섹터 일봉(KIS `FHKUP03500100`, `sector_daily_ohlcv`, 장외 시간)을 각각 `run_dart_calendar_sector_backfill.py`로 실행
+- [ ] **Step 5: 추가 실패하는 테스트 작성 (stock_events/sector_daily_ohlcv 파싱)**
+
+`data_collection/test_backfill_dart_calendar_sector.py`에 추가:
+
+```python
+from data_collection.backfill_dart_calendar_sector import (
+    parse_dart_reports, parse_sector_daily_response,
+)
+
+
+def test_parse_dart_reports_classifies_and_filters():
+    raw_reports = [
+        {"rcept_dt": "20190315", "report_nm": "유상증자 결정"},
+        {"rcept_dt": "20190316", "report_nm": "최대주주변경"},  # 매핑 안 되는 건 제외
+    ]
+    rows = parse_dart_reports(raw_reports, ticker="005930")
+    assert rows == [{"ticker": "005930", "event_date": "2019-03-15",
+                       "event_type": "유상증자", "description": "유상증자 결정"}]
+
+
+def test_parse_sector_daily_response_extracts_ohlcv():
+    raw = {"output2": [{"stck_bsop_date": "20190102", "bstp_nmix_oprc": "1050.5",
+                          "bstp_nmix_hgpr": "1055.0", "bstp_nmix_lwpr": "1048.0",
+                          "bstp_nmix_prpr": "1052.0", "acml_vol": "500000"}]}
+    rows = parse_sector_daily_response(raw, sector_code="0005")
+    assert rows == [{"sector_code": "0005", "trade_date": "2019-01-02",
+                       "open": 1050.5, "high": 1055.0, "low": 1048.0,
+                       "close": 1052.0, "volume": 500000}]
+```
+
+- [ ] **Step 6: 테스트 실패 확인**
+
+Run: `/home/user/miniconda3/envs/kis_collector/bin/python -m pytest data_collection/test_backfill_dart_calendar_sector.py -v`
+Expected: FAIL (2개 새 테스트, `parse_dart_reports`/`parse_sector_daily_response` 미정의)
+
+- [ ] **Step 7: 구현 — `stock_events`/`sector_daily_ohlcv`/`calendar`/`market_events` upsert 함수 추가**
+
+`data_collection/backfill_dart_calendar_sector.py`에 추가:
+
+```python
+import psycopg2
+from data_collection.kis_client import KisClient
+
+
+def parse_dart_reports(raw_reports: list[dict], ticker: str) -> list[dict]:
+    rows = []
+    for r in raw_reports:
+        event_type = classify_dart_event(r["report_nm"])
+        if event_type is None:
+            continue
+        d = r["rcept_dt"]
+        rows.append({"ticker": ticker, "event_date": f"{d[:4]}-{d[4:6]}-{d[6:]}",
+                      "event_type": event_type, "description": r["report_nm"]})
+    return rows
+
+
+def upsert_stock_events(dsn: str, rows: list[dict]) -> None:
+    if not rows:
+        return
+    conn = psycopg2.connect(dsn)
+    with conn.cursor() as cur:
+        for r in rows:
+            cur.execute(
+                """INSERT INTO stock_events (ticker, event_date, event_type, description)
+                   VALUES (%(ticker)s, %(event_date)s, %(event_type)s, %(description)s)
+                   ON CONFLICT (ticker, event_date, event_type) DO NOTHING""",
+                r,
+            )
+    conn.commit()
+    conn.close()
+
+
+def parse_sector_daily_response(raw: dict, sector_code: str) -> list[dict]:
+    rows = []
+    for r in raw.get("output2", []):
+        d = r["stck_bsop_date"]
+        rows.append({
+            "sector_code": sector_code, "trade_date": f"{d[:4]}-{d[4:6]}-{d[6:]}",
+            "open": float(r["bstp_nmix_oprc"]), "high": float(r["bstp_nmix_hgpr"]),
+            "low": float(r["bstp_nmix_lwpr"]), "close": float(r["bstp_nmix_prpr"]),
+            "volume": int(r["acml_vol"]),
+        })
+    return rows
+
+
+def upsert_sector_daily_ohlcv(dsn: str, rows: list[dict]) -> None:
+    if not rows:
+        return
+    conn = psycopg2.connect(dsn)
+    with conn.cursor() as cur:
+        for r in rows:
+            cur.execute(
+                """INSERT INTO sector_daily_ohlcv (sector_code, trade_date, open, high, low, close, volume)
+                   VALUES (%(sector_code)s, %(trade_date)s, %(open)s, %(high)s, %(low)s, %(close)s, %(volume)s)
+                   ON CONFLICT (sector_code, trade_date) DO UPDATE SET
+                     open = EXCLUDED.open, high = EXCLUDED.high, low = EXCLUDED.low,
+                     close = EXCLUDED.close, volume = EXCLUDED.volume""",
+                r,
+            )
+    conn.commit()
+    conn.close()
+
+
+def upsert_calendar(dsn: str, rows: list[dict]) -> None:
+    conn = psycopg2.connect(dsn)
+    with conn.cursor() as cur:
+        for r in rows:
+            cur.execute(
+                """INSERT INTO calendar (base_date, day_of_week, is_market_open, is_holiday, is_short_selling_banned)
+                   VALUES (%(base_date)s, %(day_of_week)s, %(is_market_open)s, %(is_holiday)s, %(is_short_selling_banned)s)
+                   ON CONFLICT (base_date) DO UPDATE SET
+                     day_of_week = EXCLUDED.day_of_week, is_market_open = EXCLUDED.is_market_open,
+                     is_holiday = EXCLUDED.is_holiday, is_short_selling_banned = EXCLUDED.is_short_selling_banned""",
+                r,
+            )
+    conn.commit()
+    conn.close()
+```
+
+- [ ] **Step 8: 테스트 통과 확인**
+
+Run: `/home/user/miniconda3/envs/kis_collector/bin/python -m pytest data_collection/test_backfill_dart_calendar_sector.py -v`
+Expected: PASS (6 tests)
+
+- [ ] **Step 9: 실행** — DART(`OpenDartReader`, KIS 아님)로 200종목 2019~현재 공시 수집 → `parse_dart_reports` → `upsert_stock_events`, 캘린더(`build_calendar_rows` → `upsert_calendar`, 공휴일 라이브러리 + 공매도 금지 기간 하드코딩: 2020-03-16~2021-05-02, 2023-11-06~2099-12-31, `market_events`도 동일 패턴으로 BOK/FOMC/위칭데이 하드코딩 일정 upsert), 섹터 일봉(KIS `FHKUP03500100`, 25개 섹터 코드 × 2019~현재, `parse_sector_daily_response` → `upsert_sector_daily_ohlcv`, 장외 시간)을 각각 `run_dart_calendar_sector_backfill.py`로 실행
 
 Expected: `stock_events`, `calendar`, `market_events`, `sector_daily_ohlcv` 적재 확인
 
@@ -1041,7 +1184,7 @@ git commit -m "feat: backfill DART events, trading calendar, and sector OHLCV"
 **Interfaces:**
 - Produces: `LEVERAGE_PRODUCTS: list[dict]` (설계 §6.1 표, ETN 2종 코드는 `None`으로 두고 TODO 주석 — 구현 시 KRX 정보데이터시스템에서 확인 후 채움)
 - Produces: `parse_vi_event_response(raw: dict, ticker: str) -> list[dict]`
-- Produces: `save_leverage_products(dsn: str) -> None`, `upsert_leverage_daily(dsn: str, rows: list[dict]) -> None`, `upsert_vi_events(dsn: str, rows: list[dict]) -> None`
+- Produces: `save_leverage_products(dsn: str) -> None`, `upsert_leverage_daily(dsn: str, rows: list[dict]) -> None`, `upsert_vi_events(dsn: str, rows: list[dict]) -> None`, `parse_leverage_daily_response(raw: dict, code: str) -> dict | None` (Step 7에서 구현, 정확한 필드/배율은 Step 6의 수동 단위 검증 결과에 따름 — 이 시점에 미리 확정하지 않음)
 
 - [ ] **Step 1: 실패하는 테스트 작성**
 
@@ -1206,16 +1349,39 @@ def upsert_vi_events(dsn: str, rows: list[dict]) -> None:
 Run: `/home/user/miniconda3/envs/kis_collector/bin/python -m pytest data_collection/test_leverage_products.py data_collection/test_backfill_leverage.py -v`
 Expected: PASS (5 tests)
 
-- [ ] **Step 5: ETN 코드 확인 + 실행**
+- [ ] **Step 5: ETN 코드 확인**
 
-KRX 정보데이터시스템(data.krx.co.kr)에서 "TIGER 삼성전자레버리지"/"TIGER SK하이닉스레버리지" 종목코드 조회 → `leverage_products.py`의 `code: None` 두 곳 채우기 → 위 5개 테스트 재실행(PASS 유지 확인) → `save_leverage_products(dsn)` 실행 → `run_leverage_backfill.py`로 18종 × 2026-05-27~현재 가격/거래량/AUM(KIS ETF/ETN 현재가+NAV API) 및 삼성전자·SK하이닉스 VI 이력(KIS VI 현황 API, 2019~현재) 백필 실행(장외 시간)
+KRX 정보데이터시스템(data.krx.co.kr)에서 "TIGER 삼성전자레버리지"/"TIGER SK하이닉스레버리지" 종목코드 조회 → `leverage_products.py`의 `code: None` 두 곳 채우기 → 위 5개 테스트 재실행(PASS 유지 확인) → `save_leverage_products(dsn)` 실행
 
-Expected: `leverage_products` 18행, `leverage_daily` 18종×영업일수, `vi_events`에 2026-05-27 이후 급증 확인
+- [ ] **Step 6: 단위 검증(중요) — 대량 백필 전에 반드시 1종목 1일치로 먼저 확인**
 
-- [ ] **Step 6: Commit**
+KIS ETF/ETN 현재가+NAV API 응답의 가격·거래량·NAV·AUM 필드가 실제로 어떤 단위(원 vs 백만원 vs 좌 단위 등)로 오는지 이 시점까지 확인된 바 없음 — `daily_valuation`(Task 5)에서 `hts_avls`가 "백만원 단위"라 `×1,000,000`이 필요했던 것과 같은 함정이 이 API에도 있을 수 있음. 대량 백필 전에 반드시 손으로 확인한다.
+
+```python
+# 삼성전자 레버리지 ETF 1종(코드 0193W0) 1영업일치(예: 2026-06-01)만 조회
+raw = client.request(path="/uapi/etfetn/v1/quotations/inquire-price",  # 정확한 path/tr_id는 KIS Developers 포털에서 재확인
+                       tr_id="FHPST02400000", params={...})
+print(raw)
+```
+
+체크리스트(전부 통과해야 다음 단계 진행):
+1. 가격(`close_price`)이 상식적인 ETF 가격대(수백~수만 원)인지 — 원 단위가 아니라 다른 배율로 와있으면 자릿수가 이상하게 튐
+2. `nav`가 `close_price`와 비슷한 자릿수인지(NAV와 시장가는 보통 크게 안 벌어짐)
+3. `aum`이 `nav × 상장좌수` 근사치와 맞아떨어지는지 — 상장좌수는 종목마스터파일이나 별도 조회로 확인
+4. 위 3개 중 하나라도 예상과 다른 자릿수면, 실제 KIS 응답 필드 원본을 그대로 보고 올바른 배율을 역산해서 `parse_leverage_daily_response()`(Step 7에서 구현)에 반영
+
+이 확인 결과(사용한 정확한 배율과 그 근거)를 `docs/data_units.md`의 "미확인" 표에서 `leverage_daily.close_price`/`aum`/`nav` 세 줄을 "확인된 단위" 표로 옮기는 형태로 기록할 것(리포트에도 남길 것).
+
+- [ ] **Step 7: 확인된 단위로 파싱 함수 구현 + 실행**
+
+Step 6에서 확인한 배율을 반영해 `parse_leverage_daily_response(raw: dict, code: str) -> dict | None`을 구현(패턴은 Task 5의 `parse_valuation_response`와 동일하게 딕셔너리 반환 + `upsert_leverage_daily` 호출). `run_leverage_backfill.py`로 18종 × 2026-05-27~현재 가격/거래량/AUM/NAV 백필 + 삼성전자·SK하이닉스 VI 이력(KIS VI 현황 API, 2019~현재) 백필 실행(장외 시간)
+
+Expected: `leverage_products` 18행, `leverage_daily` 18종×영업일수, `vi_events`에 2026-05-27 이후 급증 확인. 백필 직후 `SELECT code, avg(close_price), avg(aum) FROM leverage_daily GROUP BY code`로 Step 6 체크리스트 자릿수가 전체 데이터에서도 유지되는지 재확인
+
+- [ ] **Step 8: Commit**
 
 ```bash
-git add data_collection/leverage_products.py data_collection/backfill_leverage.py data_collection/test_leverage_products.py data_collection/test_backfill_leverage.py
+git add data_collection/leverage_products.py data_collection/backfill_leverage.py data_collection/test_leverage_products.py data_collection/test_backfill_leverage.py docs/data_units.md
 git commit -m "feat: backfill leverage ETF/ETN and VI event data"
 ```
 
@@ -1228,7 +1394,7 @@ git commit -m "feat: backfill leverage ETF/ETN and VI event data"
 - Test: `training/test_label.py`
 
 **Interfaces:**
-- Produces: `compute_next_day_return(close_prices: list[float]) -> list[Optional[float]]` (마지막 행은 None), `derive_threshold(returns: list[float], target_hold_ratio: float = 0.5) -> float`, `assign_label(returns: list[float], threshold: float) -> list[Optional[int]]` (0=매수, 1=관망, 2=매도)
+- Produces: `compute_next_day_return(close_prices: list[float]) -> list[Optional[float]]` (마지막 행은 None), `derive_threshold(returns: list[float], target_hold_ratio: float = 0.5) -> float`, `assign_label(returns: list[float], threshold: float) -> list[Optional[int]]` (0=매수, 1=관망, 2=매도), `build_label_rows(ticker: str, trade_dates: list[str], close_prices: list[float], threshold: float) -> list[dict]`, `upsert_labels(dsn: str, rows: list[dict]) -> None` (Task 1의 `labels` 테이블에 저장 — Task 10이 이 테이블을 `feature_pool`에 조인해서 최종 `label` 컬럼을 만든다)
 
 - [ ] **Step 1: 실패하는 테스트 작성**
 
@@ -1311,38 +1477,109 @@ def assign_label(returns: list[Optional[float]], threshold: float) -> list[Optio
 Run: `/home/user/miniconda3/envs/kis_collector/bin/python -m pytest training/test_label.py -v`
 Expected: PASS (3 tests)
 
-- [ ] **Step 5: 실제 threshold 계산 (1단계 train split, 2019-2023, 시총200 전체)**
+- [ ] **Step 5: 실패하는 테스트 작성 (labels 테이블 upsert)**
+
+`training/test_label.py`에 추가:
+
+```python
+from training.label import build_label_rows
+
+
+def test_build_label_rows_pairs_ticker_dates_with_labels():
+    dates = ["2019-01-02", "2019-01-03", "2019-01-04"]
+    closes = [100.0, 110.0, 99.0]
+    rows = build_label_rows(ticker="005930", trade_dates=dates, close_prices=closes, threshold=0.015)
+    assert rows[0] == {"ticker": "005930", "trade_date": "2019-01-02",
+                         "next_day_return": pytest.approx(0.10), "label": 0}
+    assert rows[2] == {"ticker": "005930", "trade_date": "2019-01-04",
+                         "next_day_return": None, "label": None}
+```
+
+(파일 상단에 `import pytest` 추가 필요)
+
+- [ ] **Step 6: 테스트 실패 확인**
+
+Run: `/home/user/miniconda3/envs/kis_collector/bin/python -m pytest training/test_label.py -v`
+Expected: FAIL (`build_label_rows` 미정의)
+
+- [ ] **Step 7: 구현**
+
+`training/label.py`에 추가:
+
+```python
+import psycopg2
+
+
+def build_label_rows(ticker: str, trade_dates: list[str], close_prices: list[float],
+                      threshold: float) -> list[dict]:
+    returns = compute_next_day_return(close_prices)
+    labels = assign_label(returns, threshold)
+    return [
+        {"ticker": ticker, "trade_date": d, "next_day_return": r, "label": l}
+        for d, r, l in zip(trade_dates, returns, labels)
+    ]
+
+
+def upsert_labels(dsn: str, rows: list[dict]) -> None:
+    if not rows:
+        return
+    conn = psycopg2.connect(dsn)
+    with conn.cursor() as cur:
+        for r in rows:
+            cur.execute(
+                """INSERT INTO labels (ticker, trade_date, next_day_return, label)
+                   VALUES (%(ticker)s, %(trade_date)s, %(next_day_return)s, %(label)s)
+                   ON CONFLICT (ticker, trade_date) DO UPDATE SET
+                     next_day_return = EXCLUDED.next_day_return, label = EXCLUDED.label""",
+                r,
+            )
+    conn.commit()
+    conn.close()
+```
+
+- [ ] **Step 8: 테스트 통과 확인**
+
+Run: `/home/user/miniconda3/envs/kis_collector/bin/python -m pytest training/test_label.py -v`
+Expected: PASS (5 tests)
+
+- [ ] **Step 9: 실제 threshold 계산 + 전체 기간 라벨 저장**
 
 ```python
 # training/run_derive_threshold.py:
-# 1단계 train 구간(2019-01-02~2023-12-31)의 시총200 전체 price_daily.close_price로
-# compute_next_day_return → derive_threshold(target_hold_ratio=0.5) 실행 후 결과를
-# training/threshold.json 에 저장 ({"threshold": <값>, "computed_on": "1단계 train, 2019-2023"})
+# 1) 1단계 train 구간(2019-01-02~2023-12-31)의 시총200 전체 price_daily.close_price로
+#    compute_next_day_return → derive_threshold(target_hold_ratio=0.5) 실행 후 결과를
+#    training/threshold.json 에 저장 ({"threshold": <값>, "computed_on": "1단계 train, 2019-2023"})
+# 2) 이 threshold로, 시총200 전체 종목의 전체 기간(2019-01-02~현재, 1단계/2단계 공용)에 대해
+#    종목별 build_label_rows(ticker, trade_dates, close_prices, threshold) 호출 후
+#    upsert_labels(dsn, rows)로 `labels` 테이블에 저장 — Task 10의 feature_pool 조인이 이 테이블을 사용한다
 ```
 
 Run: `/home/user/miniconda3/envs/kis_collector/bin/python training/run_derive_threshold.py`
-Expected: `training/threshold.json` 생성, 관망 비율이 45~55% 사이인지 확인
+Expected: `training/threshold.json` 생성(관망 비율 45~55% 확인), `labels` 테이블에 200종목 × 전체 기간 적재(`SELECT count(*) FROM labels WHERE label IS NOT NULL`로 확인)
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 10: Commit**
 
 ```bash
 git add training/label.py training/test_label.py training/run_derive_threshold.py
-git commit -m "feat: add next-day return labeling with data-derived threshold"
+git commit -m "feat: add next-day return labeling with data-derived threshold, persist to labels table"
 ```
 
 ---
 
-## Task 10: 피처 조인(`feature_pool`) + 레버리지 파생 피처 계산
+## Task 10: 피처 조인(`feature_pool`) + 레버리지 파생 피처 계산 + 데이터 정합성 검증
 
 **Files:**
 - Create: `features/leverage_features.py`
 - Create: `features/build_features.py`
+- Create: `features/validate_feature_pool.py`
 - Test: `features/test_leverage_features.py`
+- Test: `features/test_validate_feature_pool.py`
 
 **Interfaces:**
-- Consumes: `LEVERAGE_PRODUCTS` (Task 8)
+- Consumes: `LEVERAGE_PRODUCTS` (Task 8), `labels` table populated by Task 9's `upsert_labels` (반드시 Task 9가 먼저 완료돼 있어야 함)
+- Produces: `check_market_cap_consistency(df, tolerance=0.1) -> list[str]`, `check_value_ranges(df) -> list[str]`, `check_null_rates(df, max_null_ratio=0.3) -> dict[str, float]`, `check_trading_day_gaps(df, expected_min_days) -> list[str]`
 - Produces: `compute_rebalancing_flow(prev_aum: float, underlying_return: float, multiple: float) -> float`, `aggregate_leverage_signals(product_rows: list[dict], underlying_return: float, underlying_market_cap: float) -> dict` (returns `lev_total_volume`, `lev_total_aum`, `lev_aum_to_mktcap`, `est_rebalancing_flow`)
-- Produces: `build_feature_pool(dsn: str, start_date: str, end_date: str) -> None` (조인 → `feature_pool` 테이블 생성/적재)
+- Produces: `build_feature_pool(dsn: str, start_date: str, end_date: str) -> None` (조인 → `feature_pool` 테이블 생성/적재, `label`/`next_day_return` 컬럼 포함)
 
 - [ ] **Step 1: 실패하는 테스트 작성 (계산 로직 — 설계 §6.3 공식)**
 
@@ -1426,16 +1663,143 @@ Expected: PASS (4 tests)
 
 - [ ] **Step 5: `feature_pool` 조인 빌드 구현 및 실행**
 
-`features/build_features.py` — `price_daily`(기술적 지표: log_ret, disparity_5/20/60d, rsi_14 등은 pandas로 계산), `daily_valuation`, `investor_flow_daily`, `market_global`, `market_index_daily`, `sector_daily_ohlcv`, `stock_events`, `calendar`, `market_events`를 ticker+trade_date로 조인하고, `leverage_daily`+`leverage_products`를 `aggregate_leverage_signals`로 집계해 붙이고(2026-05-27 이전은 빈 리스트 → 자동 0), `vi_events`에서 `is_vi_triggered`/`vi_count_recent5d`를 계산해 붙여서 `feature_pool` 테이블에 적재하는 스크립트. 여기엔 §7 원칙대로 만들 수 있는 피처를 전부 포함시킨다(추후 ablation에서 subset 선택).
+`features/build_features.py` — `price_daily`(기술적 지표: log_ret, disparity_5/20/60d, rsi_14 등은 pandas로 계산), `market_global`, `market_index_daily`, `sector_daily_ohlcv`, `stock_events`, `calendar`, `market_events`를 ticker+trade_date로 조인하고(`daily_valuation`/`investor_flow_daily`는 히스토리 백필 불가로 조인 대상에서 제외 — 위 T13 주석 참고), `leverage_daily`+`leverage_products`를 `aggregate_leverage_signals`로 집계해 붙이고(2026-05-27 이전은 빈 리스트 → 자동 0), `vi_events`에서 `is_vi_triggered`/`vi_count_recent5d`를 계산해 붙이고, **`labels` 테이블(Task 9)을 (ticker, trade_date)로 조인해서 `label`/`next_day_return` 컬럼을 최종 결과에 포함**시켜 `feature_pool` 테이블에 적재하는 스크립트(Task 9가 먼저 완료되어 `labels`가 채워져 있어야 이 조인이 의미 있음 — Task 9 → Task 10 순서 의존성). 여기엔 §7 원칙대로 만들 수 있는 피처를 전부 포함시킨다(추후 ablation에서 subset 선택).
 
 Run: `/home/user/miniconda3/envs/kis_collector/bin/python features/build_features.py --start 2019-01-02 --end <today>`
 Expected: `feature_pool` 테이블에 200종목 × 전체 기간 행 적재, 컬럼 수가 기존 55개 + 레버리지 6개 이상
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 6: 실패하는 테스트 작성 (데이터 정합성 검증 — 순수 함수)**
+
+`features/test_validate_feature_pool.py` (신규 파일):
+
+```python
+import pandas as pd
+import pytest
+from features.validate_feature_pool import (
+    check_market_cap_consistency, check_value_ranges, check_null_rates, check_trading_day_gaps,
+)
+
+
+def test_market_cap_cross_check_flags_large_discrepancy():
+    # ticker_universe(price*shares)와 daily_valuation(hts_avls*1e6)이 독립적으로 계산된 시총 —
+    # 단위 버그가 있으면 이 둘이 자릿수 단위로 어긋난다
+    df = pd.DataFrame({
+        "ticker": ["005930", "000660"],
+        "universe_market_cap": [4.5e14, 9.0e13],
+        "valuation_market_cap": [4.51e14, 9.0e7],  # 000660은 1e6배 축소된 버그 상황 가정
+    })
+    issues = check_market_cap_consistency(df, tolerance=0.1)
+    assert issues == ["000660"]
+
+
+def test_market_cap_cross_check_passes_when_close():
+    df = pd.DataFrame({"ticker": ["005930"], "universe_market_cap": [4.5e14],
+                         "valuation_market_cap": [4.52e14]})
+    assert check_market_cap_consistency(df, tolerance=0.1) == []
+
+
+def test_check_value_ranges_flags_negative_price_or_volume():
+    df = pd.DataFrame({"close_price": [50000.0, -100.0], "volume": [1000, -5]})
+    issues = check_value_ranges(df)
+    assert "close_price" in issues
+    assert "volume" in issues
+
+
+def test_check_null_rates_flags_columns_over_threshold():
+    df = pd.DataFrame({"per": [None, None, None, 1.0], "close_price": [1, 2, 3, 4]})
+    issues = check_null_rates(df, max_null_ratio=0.5)
+    assert issues == {"per": pytest.approx(0.75)}
+
+
+def test_check_trading_day_gaps_flags_ticker_with_missing_days():
+    df = pd.DataFrame({
+        "ticker": ["005930"] * 3 + ["000660"] * 5,
+        "trade_date": pd.to_datetime(["2019-01-02", "2019-01-03", "2019-01-04"] +
+                                       list(pd.bdate_range("2019-01-02", periods=5))),
+    })
+    # 삼성전자는 3일치뿐인데 SK하이닉스는 5일치 — 같은 기간 대비 종목별 행 수 편차 검출
+    issues = check_trading_day_gaps(df, expected_min_days=5)
+    assert issues == ["005930"]
+```
+
+- [ ] **Step 7: 테스트 실패 확인**
+
+Run: `/home/user/miniconda3/envs/kis_collector/bin/python -m pytest features/test_validate_feature_pool.py -v`
+Expected: FAIL (`ModuleNotFoundError`)
+
+- [ ] **Step 8: 구현**
+
+`features/validate_feature_pool.py` (신규 파일):
+
+```python
+import pandas as pd
+
+
+def check_market_cap_consistency(df: pd.DataFrame, tolerance: float = 0.1) -> list[str]:
+    """두 독립 소스(시총 스냅샷 계산 vs KIS 밸류에이션 API)로 구한 시총이 tolerance 이상 어긋나면
+    단위 변환 버그일 가능성이 높다 — 티커 목록 반환."""
+    flagged = []
+    for _, row in df.iterrows():
+        a, b = row["universe_market_cap"], row["valuation_market_cap"]
+        if a == 0 or b == 0:
+            flagged.append(row["ticker"])
+            continue
+        rel_diff = abs(a - b) / max(a, b)
+        if rel_diff > tolerance:
+            flagged.append(row["ticker"])
+    return flagged
+
+
+def check_value_ranges(df: pd.DataFrame) -> list[str]:
+    """가격은 양수, 거래량은 0 이상이어야 함 — 위반 컬럼명 반환."""
+    issues = []
+    if "close_price" in df.columns and (df["close_price"] <= 0).any():
+        issues.append("close_price")
+    if "volume" in df.columns and (df["volume"] < 0).any():
+        issues.append("volume")
+    return issues
+
+
+def check_null_rates(df: pd.DataFrame, max_null_ratio: float = 0.3) -> dict[str, float]:
+    """컬럼별 결측 비율이 max_null_ratio를 넘으면 {컬럼명: 실제비율} 반환."""
+    issues = {}
+    for col in df.columns:
+        ratio = df[col].isna().mean()
+        if ratio > max_null_ratio:
+            issues[col] = ratio
+    return issues
+
+
+def check_trading_day_gaps(df: pd.DataFrame, expected_min_days: int) -> list[str]:
+    """종목별 행 수가 expected_min_days에 못 미치면 수집 누락 의심 — 티커 목록 반환."""
+    counts = df.groupby("ticker").size()
+    return counts[counts < expected_min_days].index.tolist()
+```
+
+- [ ] **Step 9: 테스트 통과 확인**
+
+Run: `/home/user/miniconda3/envs/kis_collector/bin/python -m pytest features/test_validate_feature_pool.py -v`
+Expected: PASS (5 tests)
+
+- [ ] **Step 10: 실제 `feature_pool`에 대해 실행**
+
+```python
+# features/run_validate_feature_pool.py:
+# 1) ticker_universe.market_cap과 daily_valuation.market_cap(같은 ticker, 가장 최근 공통 날짜)을 조인해서
+#    check_market_cap_consistency 실행 — 걸린 티커가 있으면 즉시 중단하고 원인(단위 배율) 조사
+# 2) feature_pool 전체에 check_value_ranges, check_null_rates(max_null_ratio=0.3, per/pbr/prop_*는 §8
+#    원칙대로 별도 허용치 적용), check_trading_day_gaps(expected_min_days= 2019~현재 영업일수의 90%) 실행
+# 3) 결과를 features/validation_report.md에 정리(문제 없으면 "이상 없음", 있으면 티커/컬럼 목록)
+```
+
+Run: `/home/user/miniconda3/envs/kis_collector/bin/python features/run_validate_feature_pool.py`
+Expected: `features/validation_report.md` 생성, 시총 교차검증 불일치 0건(0건이 아니면 Task 8/5의 단위 배율부터 재점검 — Task 11로 넘어가지 말 것)
+
+- [ ] **Step 11: Commit**
 
 ```bash
-git add features/leverage_features.py features/build_features.py features/test_leverage_features.py
-git commit -m "feat: build joined feature_pool table with leverage-derived features"
+git add features/leverage_features.py features/build_features.py features/test_leverage_features.py features/validate_feature_pool.py features/test_validate_feature_pool.py features/run_validate_feature_pool.py
+git commit -m "feat: build joined feature_pool table with leverage-derived features and data-integrity validation"
 ```
 
 ---
@@ -1883,11 +2247,16 @@ from omegaconf import OmegaConf, DictConfig
 
 # 설계 §4, §5: 기존 55개 기반 + 레버리지 6개 등 feature_pool 전체 컬럼 중
 # ablation(Task 15)에서 선택된 subset이 여기로 주입된다.
+# 2026-09-08 라이브 백필 중 확인: KIS 무료 API는 PER/PBR/시총(daily_valuation)과
+# 수급(investor_flow_daily) 둘 다 과거 시점 데이터를 지원하지 않음(전자는 API 자체가 "현재"만
+# 반환, 후자는 최근 30영업일 롤링만 가능 — 히스토리 백필 불가). 사용자 결정: PER/PBR은 이번
+# 사이클에서 포기, 수급은 보류(토스증권 API — 발급된 키 있음, 별도 클라이언트 코드 필요, 추후
+# 검토). daily_valuation/investor_flow_daily 테이블·백필 코드(Task 5)는 남겨두되(추후 토스 연동
+# 대비) feature_pool에는 조인하지 않고, 아래 목록에서도 제외한다.
 HISTORICAL_COLS_DEFAULT = [
     "rel_close", "rel_high", "rel_low", "log_ret", "disparity_5", "disparity_20", "disparity_60",
     "vol_ratio", "rsi_14", "bb_position", "macd_ratio", "macd_signal_ratio", "macd_hist_ratio",
     "log_ret_1d", "disparity_5d", "disparity_20d", "disparity_60d", "volatility_20d",
-    "prop_individual", "prop_foreign", "prop_institution", "per", "pbr", "per_chg_1d", "pbr_chg_1d",
     "kospi_ret", "kosdaq_ret", "snp500_ret", "nasdaq_ret", "phlx_semi_ret", "vix_chg",
     "usd_krw_chg", "us_10y_yield_chg", "rate_spread_us_kr", "wti_ret", "gold_ret",
     "sector_ret_1d", "sector_ret_5d", "sector_ret_20d", "sector_ma_ratio_20d",
