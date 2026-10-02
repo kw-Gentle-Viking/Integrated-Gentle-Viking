@@ -212,7 +212,13 @@ async def trading_loop(user_id: int, tickers: list[str], persona_id: int,
                 warmup_db.close()
 
         try:
-            await asyncio.wait_for(warmup_events[user_id].wait(), timeout=90)
+            # AI 서버는 /command의 "warmup" 요청을 처리하는 코드가 없어(CommandRequest에 필드조차
+            # 선언 안 됨) 이 이벤트가 켜질 길이 없다 -- KIS도 당일 1분봉만 제공해 여러 날치 5분봉
+            # 과거 데이터를 채워줄 소스가 애초에 없음(2026-10-02 통합 감사). 기본 타임아웃을 짧게
+            # 두어 매번 90초를 그냥 날리지 않게 하되, 나중에 실제 공급원이 생기면 더 기다리도록
+            # WARMUP_TIMEOUT_SEC로 조정 가능하게 둔다.
+            warmup_timeout = float(os.getenv("WARMUP_TIMEOUT_SEC", "5"))
+            await asyncio.wait_for(warmup_events[user_id].wait(), timeout=warmup_timeout)
             print(f"[User {user_id}] 모든 워밍업 데이터 수신 완료: {warmup_received.get(user_id, {})}")
         except asyncio.TimeoutError:
             missing = [
