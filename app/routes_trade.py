@@ -277,7 +277,9 @@ async def trading_loop(user_id: int, tickers: list[str], persona_id: int,
                 # 조회 자체가 실패하면 '보유 없음'으로 가정하지 않고 이번 사이클을 통째로 건너뛴다
                 # (조용히 빈 상태로 넘어가면 반복매수 버그가 재현된다, 2026-10-02 통합 감사).
                 try:
-                    portfolio.positions = load_live_positions(broker)
+                    # fetch_balance()는 동기 네트워크 호출 -- 스레드로 넘겨 다른 유저의 루프/요청
+                    # 처리를 막지 않는다.
+                    portfolio.positions = await asyncio.to_thread(load_live_positions, broker)
                 except Exception as e:
                     print(f"  [User {user_id}] KIS 포지션 조회 실패, 이번 주기 스킵: {e}")
                     continue
@@ -446,7 +448,11 @@ async def trading_loop(user_id: int, tickers: list[str], persona_id: int,
                                     if not kis_is_mock() and not kis_real_trading_enabled():
                                         raise Exception("Set KIS_REAL_TRADING_ENABLED=true to allow real-account orders")
 
-                                    resp = broker.create_order(
+                                    # create_order()도 동기 네트워크 호출 -- 재시도 대기(sleep)와
+                                    # 더불어 이 블록 안에서는 취소 신호도 이 호출이 끝날 때까지 늦게
+                                    # 반영되므로, 스레드로 넘겨 이벤트 루프 자체는 막지 않는다.
+                                    resp = await asyncio.to_thread(
+                                        broker.create_order,
                                         symbol=ticker,
                                         side=order_signal,
                                         qty=qty,
@@ -537,8 +543,8 @@ async def start_trading(
     if payload.total_capital:
         total_capital = payload.total_capital
     else:
-        # TODO: KIS API로 예수금 조회
-        total_capital = get_balance()
+        # get_balance()는 동기 네트워크 호출 -- 스레드로 넘겨 이벤트 루프를 막지 않는다.
+        total_capital = await asyncio.to_thread(get_balance)
 
     if user_id in active_tasks and not active_tasks[user_id].done():
         return {"status": "ALREADY_RUNNING", "message": "이미 자동매매 실행 중"}
