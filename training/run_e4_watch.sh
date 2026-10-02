@@ -35,7 +35,7 @@
 set -uo pipefail
 
 RESULTS="${RESULTS:-training/artifacts/e4_results.json}"
-RECIPES="${RECIPES:-x1_cslabel x2_cslabel_nostatic x3_vn_nostatic x4_cslabel_vnfeat x2_nostatic_nowd x3_vn_nostatic_nowd x2_nostatic_seed1 x3_vn_nostatic_seed1 x2_nostatic_seed2 x3_vn_nostatic_seed2 v3_structure_nowd v3_structure_nowd_seed1 v3_structure_nowd_seed2 v3_structure_nowd_vn v3_structure_nowd_cs v3_structure_wd1e4 v3_structure_wd3e4 v3_structure_nowd_patience8 v3_structure_nowd_dropout30}"
+RECIPES="${RECIPES:-x1_cslabel x2_cslabel_nostatic x3_vn_nostatic x4_cslabel_vnfeat x2_nostatic_nowd x3_vn_nostatic_nowd x2_nostatic_seed1 x3_vn_nostatic_seed1 x2_nostatic_seed2 x3_vn_nostatic_seed2 v3_structure_nowd v3_structure_nowd_seed1 v3_structure_nowd_seed2 v3_structure_nowd_vn v3_structure_nowd_cs v3_structure_wd1e4 v3_structure_wd3e4 v3_structure_nowd_patience8 v3_structure_nowd_dropout30 v3_structure_nowd_vn_seed1 v3_structure_nowd_vn_seed2}"
 PYTHON="${PYTHON:-/home/user/miniconda3/envs/dl_env/bin/python}"
 WORKTREE="${WORKTREE:-/home/user/AI_Gentle_Viking_RE/.worktrees/ai-model-redesign}"
 CONSECUTIVE_IDLE_CHECKS="${CONSECUTIVE_IDLE_CHECKS:-10}"

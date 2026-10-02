@@ -182,6 +182,13 @@ RECIPES = {
                                  weight_decay=0.0,
                                  desc="v3_structure_nowd + label_source=cs (cross-sectional quantile) -- first test of the "
                                       "cs label together with static ids kept and weight_decay=0"),
+    "v3_structure_nowd_vn_seed1": dict(tag="V3wd0vns1", label_source="label_vn", static_const=False, vol_rank=False,
+                                       weight_decay=0.0, seed=1,
+                                       desc="v3_structure_nowd_vn, seed=1 -- seed0 roughly doubled OOT timing IC vs the "
+                                            "fixed-label base (0.030 vs 0.013-0.018); is that seed-independent?"),
+    "v3_structure_nowd_vn_seed2": dict(tag="V3wd0vns2", label_source="label_vn", static_const=False, vol_rank=False,
+                                       weight_decay=0.0, seed=2,
+                                       desc="v3_structure_nowd_vn, seed=2 -- same seed-confirmation as seed1."),
     "v3_structure_wd1e4": dict(tag="V3wd1e4", label_source="label", static_const=False, vol_rank=False,
                                weight_decay=0.0001,
                                desc="v3_structure_nowd with weight_decay=1e-4 instead of 0 -- a small Adam L2 between 0 "
@@ -209,7 +216,10 @@ DEFAULT_ORDER = ["x1_cslabel", "x2_cslabel_nostatic", "x3_vn_nostatic", "x4_csla
                   "v3_structure_nowd_seed1", "v3_structure_nowd_seed2",
                   "v3_structure_nowd_vn", "v3_structure_nowd_cs",
                   "v3_structure_wd1e4", "v3_structure_wd3e4",
-                  "v3_structure_nowd_patience8", "v3_structure_nowd_dropout30"]
+                  "v3_structure_nowd_patience8", "v3_structure_nowd_dropout30",
+                  # label_vn seed-confirmation: v3_structure_nowd_vn (seed0) nearly doubled OOT timing IC vs the
+                  # fixed-label base -- confirm before finalizing as the candidate.
+                  "v3_structure_nowd_vn_seed1", "v3_structure_nowd_vn_seed2"]
 
 
 # --------------------------------------------------------------------------------------------
