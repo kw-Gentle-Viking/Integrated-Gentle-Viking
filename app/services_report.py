@@ -15,25 +15,44 @@ TFT(Temporal Fusion Transformer) 딥러닝 모델이 생성한 주가 예측 결
 - 수치는 반드시 해석과 함께 제시한다 (숫자만 나열하지 않는다).
 - 보고서 말미에는 반드시 투자 유의사항을 포함한다."""
 
-# 피처 해석 매핑
+# 피처 해석 매핑. training/champion_config.json의 33개 컬럼과 1:1로 맞춰야 한다 -- 예전엔
+# bb_position/vol_ratio/macd_ratio/per/pbr/prop_foreign/prop_individual/prop_institution 등
+# 지금 모델에 없는 8개 피처가 매핑돼 있었고, disparity_5d/20d/60d·sector_*·lev_*·snp500_ret 등
+# 실제 피처 25개 가량은 매핑이 아예 없어 원본 컬럼명이 그대로 노출되고 있었다(2026-10-02 통합 감사).
 FEATURE_DESC = {
-    "rsi_14": ("RSI(14)", lambda v: "과매도 구간" if v < 30 else "과매수 구간" if v > 70 else "중립 구간"),
     "log_ret": ("직전 봉 로그 수익률", lambda v: "직전 봉 상승" if v > 0 else "직전 봉 하락"),
-    "disparity_5": ("5봉 이동평균 이격도", lambda v: "단기 과열" if v > 1.03 else "단기 침체" if v < 0.97 else "중립"),
-    "disparity_20": ("20봉 이동평균 이격도", lambda v: "중기 과열" if v > 1.05 else "중기 침체" if v < 0.95 else "이동평균 근접"),
-    "disparity_60": ("60봉 이동평균 이격도", lambda v: "장기 과열" if v > 1.1 else "장기 침체" if v < 0.9 else "중립"),
-    "bb_position": ("볼린저밴드 위치", lambda v: "상단 돌파" if v > 0.8 else "하단 접근" if v < 0.2 else "중앙 구간"),
-    "vol_ratio": ("거래량 비율", lambda v: "거래량 급증" if v > 2.0 else "거래량 급감" if v < 0.5 else "보통"),
-    "macd_ratio": ("MACD/현재가 비율", lambda v: "상승 모멘텀" if v > 0 else "하락 모멘텀"),
+    "disparity_5d": ("5일 이동평균 이격도", lambda v: "단기 과열" if v > 1.03 else "단기 침체" if v < 0.97 else "중립"),
+    "disparity_20d": ("20일 이동평균 이격도", lambda v: "중기 과열" if v > 1.05 else "중기 침체" if v < 0.95 else "이동평균 근접"),
+    "disparity_60d": ("60일 이동평균 이격도", lambda v: "장기 과열" if v > 1.1 else "장기 침체" if v < 0.9 else "중립"),
+    "rsi_14": ("RSI(14)", lambda v: "과매도 구간" if v < 30 else "과매수 구간" if v > 70 else "중립 구간"),
+    "volatility_20d": ("20일 변동성(수익률 표준편차)", lambda v: "고변동성" if v > 0.02 else "저변동성" if v < 0.01 else "보통 변동성"),
+    "sector_ret_1d": ("섹터 1일 수익률", lambda v: f"섹터 {'상승' if v > 0 else '하락'} {abs(v)*100:.2f}%"),
+    "sector_ret_5d": ("섹터 5일 수익률", lambda v: f"섹터 {'상승' if v > 0 else '하락'} {abs(v)*100:.2f}%"),
+    "sector_ret_20d": ("섹터 20일 수익률", lambda v: f"섹터 {'상승' if v > 0 else '하락'} {abs(v)*100:.2f}%"),
+    "sector_ma_ratio_20d": ("섹터 20일 이동평균 대비 비율", lambda v: "섹터 과열" if v > 1.05 else "섹터 침체" if v < 0.95 else "중립"),
+    "sector_volatility": ("섹터 변동성(고저 range/종가)", lambda v: "섹터 변동성 확대" if v > 0.03 else "섹터 변동성 축소" if v < 0.01 else "보통"),
+    "sector_volume_ratio": ("섹터 거래량 비율", lambda v: "섹터 거래량 급증" if v > 2.0 else "섹터 거래량 급감" if v < 0.5 else "보통"),
+    "is_dividend": ("배당 이벤트", lambda v: "배당 이벤트 있음" if v else "배당 이벤트 없음"),
+    "is_bonus_issue": ("무상증자 이벤트", lambda v: "무상증자 있음" if v else "무상증자 없음"),
+    "is_rights_offering": ("유상증자 이벤트", lambda v: "유상증자 있음" if v else "유상증자 없음"),
+    "is_split": ("액면분할 이벤트", lambda v: "액면분할 있음" if v else "액면분할 없음"),
+    "day_of_week": ("요일(0=월~4=금)", lambda v: {0: "월요일", 1: "화요일", 2: "수요일", 3: "목요일", 4: "금요일"}.get(int(v), f"요일코드 {v}")),
+    "lev_total_aum": ("레버리지/인버스 ETF 전체 AUM", lambda v: f"AUM {v:,.0f}"),
+    "lev_aum_to_mktcap": ("레버리지 ETF AUM/시장 시총 비율", lambda v: "레버리지 비중 높음" if v > 0.05 else "레버리지 비중 낮음"),
+    "est_rebalancing_flow": ("추정 리밸런싱 수급", lambda v: "리밸런싱 매수 추정" if v > 0 else "리밸런싱 매도 추정"),
+    "is_vi_triggered": ("VI(변동성완화장치) 발동 여부", lambda v: "VI 발동" if v else "VI 미발동"),
+    "vi_count_recent5d": ("최근 5일 VI 발동 횟수", lambda v: f"{int(v)}회"),
     "kospi_ret": ("KOSPI 당일 등락률", lambda v: f"KOSPI {'상승' if v > 0 else '하락'} {abs(v)*100:.2f}%"),
     "kosdaq_ret": ("KOSDAQ 당일 등락률", lambda v: f"KOSDAQ {'상승' if v > 0 else '하락'} {abs(v)*100:.2f}%"),
-    "prop_foreign": ("외국인 순매수 비율", lambda v: "외국인 순매수" if v > 0 else "외국인 순매도"),
-    "prop_individual": ("개인 순매수 비율", lambda v: "개인 순매수" if v > 0 else "개인 순매도"),
-    "prop_institution": ("기관 순매수 비율", lambda v: "기관 순매수" if v > 0 else "기관 순매도"),
-    "per": ("PER", lambda v: f"PER {v:.1f}"),
-    "pbr": ("PBR", lambda v: "청산가치 이하" if v < 1 else f"PBR {v:.2f}"),
+    "snp500_ret": ("S&P500 당일 등락률", lambda v: f"S&P500 {'상승' if v > 0 else '하락'} {abs(v)*100:.2f}%"),
+    "nasdaq_ret": ("NASDAQ 당일 등락률", lambda v: f"NASDAQ {'상승' if v > 0 else '하락'} {abs(v)*100:.2f}%"),
+    "phlx_semi_ret": ("필라델피아 반도체지수 당일 등락률", lambda v: f"반도체지수 {'상승' if v > 0 else '하락'} {abs(v)*100:.2f}%"),
     "vix_chg": ("VIX 변동", lambda v: "불확실성 증가" if v > 0 else "시장 안도"),
     "usd_krw_chg": ("원달러 환율 변동", lambda v: "원화 약세" if v > 0 else "원화 강세"),
+    "us_10y_yield_chg": ("미국 10년물 금리 변동", lambda v: "금리 상승" if v > 0 else "금리 하락"),
+    "rate_spread_us_kr": ("한미 금리 스프레드(미국-한국)", lambda v: f"스프레드 {v:+.2f}%p"),
+    "wti_ret": ("WTI 원유 당일 등락률", lambda v: f"WTI {'상승' if v > 0 else '하락'} {abs(v)*100:.2f}%"),
+    "gold_ret": ("금 가격 당일 등락률", lambda v: f"금 가격 {'상승' if v > 0 else '하락'} {abs(v)*100:.2f}%"),
 }
 
 EVENT_DESC = {
