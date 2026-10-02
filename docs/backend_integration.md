@@ -61,13 +61,17 @@ Front(로직만, UI 무변경): 새로고침이 `job_id`(GET /ai/once/{job_id})�
 - 포트폴리오 페이지 "1회 분석" 폴링에 `job_id` 게이팅이 없어 콜백 도착 전 이전 예측을 새 결과로 오인할 레이스 → `lib/ai/predictionJobStore.ts`의 `isOnceJobDone` 재사용. (Front `b468bab`)
 - AI 유니버스(코스피 200) 밖 종목의 추론 결과를 무조건 "실제 응답"으로 표시 → `modelVersion` 존재 여부로 조건화. (Front `c0872d8`)
 
-중간 6건:
+중간 7건:
 - `pred_label`이 0/1/2 밖이면 로그 없이 HOLD로 폴백(모델 버그 은폐 가능) → WARNING 로그 추가. (Back `18c8563`)
 - ONCE 결과가 `AIPredictionHistory`에 전혀 안 남음(실시간 push만 기록) → `record_predictions()` 호출 추가. (Back `18c8563`)
 - `job_id`/`user_id`를 AI가 매번 보내는데 `RealtimePayload`에 필드가 없어 조용히 드롭 → 필드 추가(선택값). (Back `18c8563`)
 - `/trade/history`의 `status`(FAILED)를 한 화면(`AITradeHistory`)은 거르고 다른 화면(`portfolio`)은 그대로 노출 → 실패 배지 추가. (Front `b468bab`)
 - `/trade/status` 등 조회 실패(401/500)해도 조용히 이전 상태 유지 → 에러 메시지 노출. (Front `b468bab`)
 - `/ai/agreement`가 AI 커버리지 밖 종목도 "TFT는 관망 의견"처럼 허위 해석 생성 → `is_ai_covered_ticker` 선확인 후 "비교 불가" 응답. (Back `f2f481a`)
+- `FEATURE_DESC`(interpretability 리포트용 피처 설명)가 지금 모델에 없는 옛 피처 8개(`bb_position`,
+  `vol_ratio`, `macd_ratio`, `per`, `pbr`, `prop_*`)에 매핑돼 있고, 실제 33개 피처 중 25개 가량
+  (`disparity_5d/20d/60d`, `sector_*`, `lev_*` 등)은 매핑이 없어 원본 컬럼명이 그대로 노출됨 →
+  실제 champion 컬럼 33개와 1:1로 재작성 + 드리프트 방지 테스트 추가. (Back `f361ffe`)
 
 기타: `run_once()`/`get_market_close()` 죽은 코드 제거(호출부 없음, `broker.create_order` 없이 `TradeLog`에 `FILLED`를
 가짜로 기록하도록 drift돼 있었음, Back `f68437a` 포함) · AI/백엔드 `AI_SERVER_API_KEY` 기본값 3군데 불일치 통일(AI `e506b21`) ·
