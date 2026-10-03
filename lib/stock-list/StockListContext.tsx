@@ -23,6 +23,8 @@ interface StockListContextType {
   isInCart: (code: string) => boolean;
 }
 
+const MAX_CART_STOCKS = 5;
+
 const StockListContext = createContext<StockListContextType | undefined>(undefined);
 
 
@@ -103,6 +105,10 @@ export const StockListProvider = ({ children }: { children: React.ReactNode }) =
   const toggleCart = (code: string, stock?: StockListItem) => {
     const nextStock = stock ?? makeFallbackStock(code);
     const removing = cartStocks.some((item) => item.code === code);
+    if (!removing && cartStocks.length >= MAX_CART_STOCKS) {
+      window.alert(`자동매매 종목은 최대 ${MAX_CART_STOCKS}개까지 담을 수 있습니다.`);
+      return;
+    }
 
     setCartStocks((prev) => {
       if (prev.some((item) => item.code === code)) {
