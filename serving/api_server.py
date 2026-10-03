@@ -40,6 +40,7 @@ from pydantic import BaseModel
 
 from serving.feature_builder import build_encoder_df_for_ticker
 from serving.inference import run_inference
+from serving.limits import MAX_ACTIVE_TICKERS
 from serving.model import get_feature_columns, get_model, get_model_version
 
 logging.basicConfig(
@@ -157,6 +158,9 @@ async def handle_command(
         data = load_tickers()
         data["users"][req.user_id] = req.tickers
         all_t = sorted(set(t for ts in data["users"].values() for t in ts))
+        if len(all_t) > MAX_ACTIVE_TICKERS:
+            raise HTTPException(status_code=400,
+                                detail=f"활성 종목은 최대 {MAX_ACTIVE_TICKERS}개입니다 (현재 요청 후 {len(all_t)}개)")
         data["all_tickers"] = all_t
         save_tickers(data)
         logger.info("START: %s -> %s / 전체: %s", req.user_id, req.tickers, all_t)

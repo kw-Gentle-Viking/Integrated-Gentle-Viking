@@ -33,6 +33,8 @@ from datetime import datetime
 
 import requests
 
+from serving.limits import MAX_ACTIVE_TICKERS
+
 from serving.feature_builder import build_encoder_df_for_ticker, fetch_today_intraday_rows
 from serving.inference import run_inference
 from serving.model import get_feature_columns, get_model, get_model_version
@@ -51,9 +53,13 @@ def load_active_tickers(tickers_file: str = TICKERS_FILE) -> list[str]:
         return []
     try:
         with open(tickers_file) as f:
-            return json.load(f).get("all_tickers", [])
+            tickers = json.load(f).get("all_tickers", [])
     except Exception:
         return []
+    if len(tickers) > MAX_ACTIVE_TICKERS:
+        logger.warning("활성 종목 %d개 > 상한 %d -> 앞의 %d개만 추론", len(tickers), MAX_ACTIVE_TICKERS, MAX_ACTIVE_TICKERS)
+        tickers = tickers[:MAX_ACTIVE_TICKERS]
+    return tickers
 
 
 def is_within_market_hours(now: datetime) -> bool:
