@@ -135,3 +135,15 @@ GCP 값으로 바꿔두는 것은 아무 의미가 없다(로컬 드라이런이
   구현돼 있고 ONCE는 아직 없음(의도적 스코프 축소, 버그 아님 — 단, 백엔드가 이 차이를 전제해야 함).
 - **실패한 종목은 결과 배열에서 조용히 빠짐**: 특정 종목 추론이 계속 실패해도 백엔드가 "요청한 개수 대비
   부족"을 감지하는 로직이 없음(개선 여지, `docs/integration_audit_2026-10-02.md` 항목 참고).
+
+## AI 데이터(stock_db_v2) 일별 갱신 (2026-10-06부터)
+
+운영 수집 크론(`collector_*`, `build_batch_features`)은 **운영 `stock_db`(350종목)** 만 채운다. AI가 읽는
+`stock_db_v2`(200종목, `feature_pool` 포함)는 별도로 갱신해야 하며, 평일 16:45에
+`scripts/daily_v2_refresh.sh`가 다음을 순서대로 실행한다(2026-10-06 이전에는 아무 것도 하지 않음):
+
+1. `data_collection/sync_v2_from_prod.py` — 운영 `stock_db`에서 AI 200종목 공통 테이블 9개를 증분 복사
+2. `data_collection/run_leverage_backfill.py` — v2 전용 `leverage_daily` 갱신 (VI 이벤트는 KIS에 과거 조회 API가 없어 제외)
+3. `features/build_features.py --start <90일 전> --end <오늘>` — `feature_pool` 재빌드(롤링 피처 lookback 확보)
+
+로그: `serving/daily_v2_refresh.log`. 이 갱신이 멈추면 AI 추론이 "stale history"로 전부 실패하므로 가장 먼저 볼 것.

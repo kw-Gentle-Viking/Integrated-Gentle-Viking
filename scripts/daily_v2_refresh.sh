@@ -1,0 +1,24 @@
+#!/bin/bash
+# AI용 stock_db_v2 일별 갱신: 운영 stock_db 복사 -> leverage 갱신 -> feature_pool 재빌드.
+# 평일 16:45 (운영 수집 16:00 / build_batch_features 16:30 이후). 2026-10-06 전에는 아무것도 하지 않는다.
+set -u
+REPO=/home/user/AI_Gentle_Viking_RE/.worktrees/ai-model-redesign
+PY=/home/user/miniconda3/envs/dl_env/bin/python
+START_DATE=2026-10-06
+
+today=$(date +%F)
+if [[ "$today" < "$START_DATE" ]]; then
+  echo "[$(date '+%F %T')] $today < $START_DATE -> skip"
+  exit 0
+fi
+
+cd "$REPO" || exit 1
+set -a; . ./.env; set +a
+echo "[$(date '+%F %T')] start daily v2 refresh"
+
+$PY -m data_collection.sync_v2_from_prod || { echo "sync failed"; exit 1; }
+$PY -m data_collection.run_leverage_backfill || echo "leverage backfill failed (continuing)"
+from=$(date -d '-90 days' +%F)
+$PY -m features.build_features --start "$from" --end "$today" || { echo "build_features failed"; exit 1; }
+
+echo "[$(date '+%F %T')] done"
