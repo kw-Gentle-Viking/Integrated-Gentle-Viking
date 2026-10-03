@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
 from app.ai_universe import is_ai_covered_ticker
+from app.limits import MAX_BASKET_TICKERS
 from app.db import get_db
 from app.dependencies import get_current_user
 from app.models import User, Basket
@@ -30,6 +31,10 @@ def add_to_basket(
 
     if exists:
         raise HTTPException(status_code=409, detail="이미 바구니에 있는 종목입니다")
+
+    count = db.query(Basket).filter(Basket.user_id == current_user.id).count()
+    if count >= MAX_BASKET_TICKERS:
+        raise HTTPException(status_code=400, detail=f"자동매매 종목은 최대 {MAX_BASKET_TICKERS}개까지 담을 수 있습니다")
 
     if not is_ai_covered_ticker(payload.ticker):
         raise HTTPException(

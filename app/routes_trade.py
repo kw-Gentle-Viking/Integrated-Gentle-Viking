@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from app.ai_universe import is_ai_covered_ticker
+from app.limits import MAX_BASKET_TICKERS
 from app.db import get_db,SessionLocal
 from app.dependencies import get_current_user
 from app.kis_positions import apply_fill, load_live_positions
@@ -103,6 +104,9 @@ def sync_request_basket(db: Session, user_id: int, payload) -> None:
             code = ticker.strip()
             if code:
                 requested[code] = code
+
+    if len(requested) > MAX_BASKET_TICKERS:
+        raise HTTPException(status_code=400, detail=f"자동매매 종목은 최대 {MAX_BASKET_TICKERS}개까지입니다 (요청 {len(requested)}개)")
 
     existing = {
         item.ticker: item
