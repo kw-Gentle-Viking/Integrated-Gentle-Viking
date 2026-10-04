@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.ai_universe import is_ai_covered_ticker
 from app.limits import MAX_BASKET_TICKERS
+from app.intraday_seed import seed_live_candles
 from app.db import get_db,SessionLocal
 from app.dependencies import get_current_user
 from app.kis_positions import apply_fill, load_live_positions
@@ -596,8 +597,17 @@ async def start_trading(
     try:
         warmup_db.query(LiveCandle).filter(LiveCandle.ticker.in_(tickers)).delete(synchronize_session=False)
         warmup_db.commit()
+        try:
+            seeded = seed_live_candles(warmup_db, tickers, {t: r["count"] for t, r in zip(tickers, warmup_requests)})
+        except Exception as e:  # noqa: BLE001
+            print(f"[User {user_id}] 운영 5분봉 워밍업 실패, AI 푸시 대기로 진행: {e}")
+            seeded = {}
     finally:
         warmup_db.close()
+    warmup_received[user_id] = seeded
+    if seeded and all(seeded.get(t, 0) >= warmup_requirements[user_id][t] for t in tickers):
+        warmup_events[user_id].set()
+        print(f"[User {user_id}] 운영 5분봉으로 워밍업 완료: {seeded}")
 
     command_queue.append({
         "command": "START",

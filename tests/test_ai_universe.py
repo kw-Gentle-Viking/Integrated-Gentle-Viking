@@ -100,3 +100,9 @@ def test_add_to_basket_rejects_ai_uncovered_ticker(monkeypatch, db):
         rb.add_to_basket(rb.BasketAdd(ticker="068270", ticker_name="코스닥종목"), db=db, current_user=user)
     assert exc.value.status_code == 400
     assert "068270" in exc.value.detail
+
+
+def test_seed_live_candles_is_noop_without_prod_dsn(monkeypatch, db):
+    from app.intraday_seed import seed_live_candles
+    monkeypatch.delenv("PROD_STOCK_DB_DSN", raising=False)
+    assert seed_live_candles(db, ["005930"], {"005930": 240}) == {}
