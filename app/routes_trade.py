@@ -6,6 +6,10 @@ from sqlalchemy.orm import Session
 from app.ai_universe import is_ai_covered_ticker
 from app.limits import MAX_BASKET_TICKERS
 from app.intraday_seed import seed_live_candles
+from app.allocation_policy import allocation_policy, per_order_notional_cap
+from app.kis_orders import inquire_order_fill
+import os as _os
+from datetime import date as _date
 from app.db import get_db,SessionLocal
 from app.dependencies import get_current_user
 from app.kis_positions import apply_fill, load_live_positions
@@ -39,6 +43,7 @@ MARKET_ORDER_TYPE = "01"  # mojito/KIS: ORD_DVSN 01 = 시장가
 
 # 유저별 자동매매 상태 저장 (메모리)
 active_tasks: dict[int, asyncio.Task] = {}
+_last_price_hint: dict[str, float] = {}
 active_demo_trades: set[int] = set()
 ai_client = AIClient()
 
@@ -183,7 +188,8 @@ async def trading_loop(user_id: int, tickers: list[str], persona_id: int,
     portfolio.equity = total_capital
     # 종목당/1회 주문당/전체 노출 상한 -- backtest 엔진엔 이미 있었지만 실거래 루프엔 연결돼 있지 않았다
     # (2026-10-02 통합 감사). 사이클 전체에 걸쳐 쿨다운/halt 상태를 유지해야 하므로 루프당 1회만 생성.
-    risk_mgr = RiskManager(RiskLimits())
+    policy = allocation_policy()
+    risk_mgr = RiskManager(RiskLimits(per_order_notional_cap=per_order_notional_cap(policy)))
 
     ws = KISWebSocket(
         app_key=os.getenv("KIS_APP_KEY"),
@@ -304,6 +310,7 @@ async def trading_loop(user_id: int, tickers: list[str], persona_id: int,
                 cash_reserve=config.cash_reserve,
                 min_confidence=config.min_confidence,
                 use_persona_boost=config.use_persona_boost,
+                policy=policy,
                 )
                 allocation_map = {a["ticker"]: a for a in allocation}
 
@@ -789,3 +796,54 @@ def get_trade_history(
 
     return [trade_log_to_dict(log) for log in logs]
 
+
+class SmokeOrderRequest(BaseModel):
+    ticker: str
+    side: str  # buy | sell
+
+
+@router.post("/smoke-order")
+async def smoke_order(payload: SmokeOrderRequest, current_user: User = Depends(get_current_user)):
+    """배포 후 체결 경로 점검용: 1주 시장가 주문 → 체결 조회. 모의계좌 + 비운영 환경에서만, AI 200종목만."""
+    if _os.getenv("APP_ENV", "").lower() == "production" or not kis_is_mock():
+        raise HTTPException(status_code=403, detail="스모크 주문은 모의계좌 비운영 환경에서만 가능합니다")
+    if payload.side not in ("buy", "sell"):
+        raise HTTPException(status_code=400, detail="side는 buy 또는 sell")
+    if not is_ai_covered_ticker(payload.ticker):
+        raise HTTPException(status_code=400, detail="AI 학습 종목(코스피 200)만 가능합니다")
+    if not broker:
+        raise HTTPException(status_code=503, detail="KIS 브로커가 연결되지 않았습니다")
+
+    price_row = _last_price_hint.get(payload.ticker, 0)
+    try:
+        resp = await asyncio.to_thread(
+            broker.create_order, side=payload.side, symbol=payload.ticker, price=0, quantity=1,
+            order_type=MARKET_ORDER_TYPE,
+        )
+    except Exception as e:  # noqa: BLE001
+        resp = {"rt_cd": "exception", "msg1": str(e)}
+    ok = resp.get("rt_cd") == "0"
+    odno = (resp.get("output") or {}).get("ODNO") if ok else None
+    db = SessionLocal()
+    try:
+        db.add(TradeLog(
+            user_id=current_user.id, ticker=payload.ticker, side=payload.side.upper(), qty=1,
+            price=float(price_row), amount=float(price_row), ai_signal="SMOKE", ai_confidence=0.0,
+            strategy_id="SMOKE_TEST", status="FILLED" if ok else "FAILED", order_no=odno,
+        ))
+        add_auto_decision(db, current_user.id, payload.ticker, "SMOKE_ORDER",
+                          "FILLED" if ok else "FAILED", resp.get("msg1") or "", strategy_id="SMOKE_TEST")
+        db.commit()
+    finally:
+        db.close()
+
+    fill = None
+    if ok and odno:
+        await asyncio.sleep(3)
+        try:
+            fill = await asyncio.to_thread(inquire_order_fill, broker, odno,
+                                           _date.today().strftime("%Y%m%d"), True)
+        except Exception as e:  # noqa: BLE001
+            fill = {"error": str(e)}
+    return {"status": "FILLED" if ok else "FAILED", "order_no": odno,
+            "kis_message": resp.get("msg1"), "fill": fill}

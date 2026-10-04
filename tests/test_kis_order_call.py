@@ -20,3 +20,29 @@ def test_routes_trade_uses_mojito_compatible_order_call():
     assert "quantity=qty" in src
     assert "side=order_signal.lower()" in src
     assert rt.MARKET_ORDER_TYPE == "01"
+
+
+def test_smoke_order_refuses_production(monkeypatch):
+    import asyncio
+    import app.routes_trade as rt
+    from types import SimpleNamespace
+    from fastapi import HTTPException
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setattr(rt, "kis_is_mock", lambda: True)
+    with __import__("pytest").raises(HTTPException) as e:
+        asyncio.run(rt.smoke_order(rt.SmokeOrderRequest(ticker="005930", side="buy"), SimpleNamespace(id=1)))
+    assert e.value.status_code == 403
+
+
+def test_smoke_order_refuses_non_universe_ticker(monkeypatch):
+    import asyncio
+    import app.routes_trade as rt
+    from types import SimpleNamespace
+    from fastapi import HTTPException
+    monkeypatch.setenv("APP_ENV", "development")
+    monkeypatch.setattr(rt, "kis_is_mock", lambda: True)
+    monkeypatch.setattr(rt, "is_ai_covered_ticker", lambda t: False)
+    monkeypatch.setattr(rt, "broker", object())
+    with __import__("pytest").raises(HTTPException) as e:
+        asyncio.run(rt.smoke_order(rt.SmokeOrderRequest(ticker="247540", side="buy"), SimpleNamespace(id=1)))
+    assert e.value.status_code == 400

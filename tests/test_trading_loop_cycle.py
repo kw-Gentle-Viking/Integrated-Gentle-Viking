@@ -110,16 +110,19 @@ def test_one_trading_cycle_places_order_and_records_it(monkeypatch, session_fact
     db.close()
 
 
-@pytest.mark.xfail(strict=True, reason="1~2개 BUY 신호면 재정규화 후 종목 비중이 30%를 넘어 리스크 확인에서 전부 거절됨")
-def test_two_buy_signals_pass_risk_check():
-    from backtest.engine.risk import Portfolio, RiskLimits, RiskManager
-    from app.services_allocation import allocate_portfolio
-    preds = [{"ticker": t, "signal": "BUY", "confidence": 0.9} for t in ("005930", "000660")]
-    alloc = allocate_portfolio(preds, persona_id=3, total_capital=10_000_000, max_weight=0.3,
-                               cash_reserve=0.1, min_confidence=0.6)
-    rm = RiskManager(RiskLimits())
-    pf = Portfolio(cash=10_000_000, equity=10_000_000)
+@pytest.mark.parametrize("policy", ["cap_cash", "redistribute"])
+@pytest.mark.parametrize("n_buy", [1, 2, 3, 5])
+def test_policy_passes_risk_check_for_every_signal_count(policy, n_buy):
+    """정책 a(cap_cash)와 b(redistribute)는 신호가 1~5개여도 1회 주문이 리스크 한도를 통과해야 한다."""
     import pandas as pd
+    from app.allocation_policy import per_order_notional_cap
+    from app.services_allocation import allocate_portfolio
+    from backtest.engine.risk import Portfolio, RiskLimits, RiskManager
+    preds = [{"ticker": f"T{i}", "signal": "BUY", "confidence": 0.9} for i in range(n_buy)]
+    alloc = allocate_portfolio(preds, persona_id=3, total_capital=10_000_000, max_weight=0.3,
+                               cash_reserve=0.1, min_confidence=0.6, policy=policy)
+    rm = RiskManager(RiskLimits(per_order_notional_cap=per_order_notional_cap(policy)))
+    pf = Portfolio(cash=10_000_000, equity=10_000_000)
     for a in alloc:
         notional = (a["amount"] // 70_000) * 70_000
         assert rm.check_pretrade(pd.Timestamp.now(), pf, a["ticker"], notional)

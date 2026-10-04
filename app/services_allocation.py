@@ -8,6 +8,7 @@ def allocate_portfolio(
     cash_reserve: float = 0.10,  # 현금 보유 10%
     min_confidence: float = 0.60,
     use_persona_boost: bool = True,
+    policy: str = "cap_cash",
 ) -> list[dict]:
     """
     predictions: [{"ticker": "005930", "signal": "BUY", "confidence": 0.85}, ...]
@@ -54,10 +55,12 @@ def allocate_portfolio(
         # 4. 최대 비중 제한
         b["weight"] = min(raw_weight, max_weight)
 
-    # 비중 재정규화 (max_weight로 잘린 만큼 재분배)
-    total_weight = sum(b["weight"] for b in buys)
-    for b in buys:
-        b["weight"] = b["weight"] / total_weight
+    # 정책 a(cap_cash): 잘린 몫은 재분배하지 않고 현금으로 남긴다 (종목당 max_weight 엄격 준수)
+    # 정책 b(redistribute): 잘린 몫을 남은 종목에 재분배 (리스크 한도는 allocation_policy.per_order_notional_cap에서 맞춘다)
+    if policy == "redistribute":
+        total_weight = sum(b["weight"] for b in buys)
+        for b in buys:
+            b["weight"] = b["weight"] / total_weight
 
     # 5. 실제 금액/수량 계산
     result = []
