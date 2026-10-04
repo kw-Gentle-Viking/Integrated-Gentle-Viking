@@ -82,11 +82,19 @@ export const StockListProvider = ({ children }: { children: React.ReactNode }) =
   const [favoriteStocks, setFavoriteStocks] = useState<StockListItem[]>([]);
   const [cartStocks, setCartStocks] = useState<StockListItem[]>([]);
 
+  const [autoTradeUniverse, setAutoTradeUniverse] = useState<Set<string> | null>(null);
+
   useEffect(() => {
     let cancelled = false;
     void fetchBasketItems().then((items) => {
       if (!cancelled && items.length > 0) setCartStocks(items);
     });
+    void apiFetch(`${process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"}/basket/universe`)
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error(String(res.status)))))
+      .then((data: { tickers: string[] }) => {
+        if (!cancelled) setAutoTradeUniverse(new Set(data.tickers));
+      })
+      .catch((error) => console.error("auto-trade universe load failed", error));
     return () => { cancelled = true; };
   }, []);
 
@@ -105,6 +113,10 @@ export const StockListProvider = ({ children }: { children: React.ReactNode }) =
   const toggleCart = (code: string, stock?: StockListItem) => {
     const nextStock = stock ?? makeFallbackStock(code);
     const removing = cartStocks.some((item) => item.code === code);
+    if (!removing && !autoTradeUniverse?.has(code)) {
+      window.alert("자동매매 바구니에는 AI 학습 종목(코스피 200)만 담을 수 있습니다.");
+      return;
+    }
     if (!removing && cartStocks.length >= MAX_CART_STOCKS) {
       window.alert(`자동매매 종목은 최대 ${MAX_CART_STOCKS}개까지 담을 수 있습니다.`);
       return;
