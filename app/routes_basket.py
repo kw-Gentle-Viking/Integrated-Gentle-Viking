@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
-from app.ai_universe import is_ai_covered_ticker
+from app.ai_universe import get_ai_universe, is_ai_covered_ticker
 from app.limits import MAX_BASKET_TICKERS
 from app.db import get_db
 from app.dependencies import get_current_user
@@ -15,6 +15,13 @@ router = APIRouter()
 class BasketAdd(BaseModel):
     ticker: str
     ticker_name: str
+
+
+@router.get("/universe")
+def get_auto_trade_universe(current_user: User = Depends(get_current_user)):
+    """자동매매 바구니에 담을 수 있는 종목(AI 학습 유니버스). 조회 불가 환경(DSN 미설정)이면 빈 목록."""
+    universe = get_ai_universe() or set()
+    return {"tickers": sorted(universe)}
 
 
 @router.post("")

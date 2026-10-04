@@ -30,7 +30,7 @@ CONFIG = {
         "CLIENT_ID": os.getenv("NAVER_CLIENT_ID"),
         "SECRET": os.getenv("NAVER_CLIENT_SECRET"),
     },
-    "GEMINI": {"API_KEY": os.getenv("GEMINI_API_KEY"), "MODEL": "gemini-2.5-flash"},
+    "GEMINI": {"API_KEY": os.getenv("GEMINI_API_KEY"), "MODEL": os.getenv("GEMINI_MODEL", "gemini-3.8-flash")},
     "DART": {"API_KEY": os.getenv("DART_API_KEY")},
     "KIS": {
         "API_KEY": os.getenv("KIS_APP_KEY"),
@@ -488,11 +488,11 @@ class financeDataCollector:
 
     # 네이버 뉴스 API로 뉴스 수집
     def fetch_naver_news(self, keyword):
-        url = "https://openapi.naver.com/v1/search/news.json"
+        url = "https://naverapihub.apigw.ntruss.com/search/v1/news"
 
         headers = {
-            "X-Naver-Client-Id": self.config["NAVER"]["CLIENT_ID"],
-            "X-Naver-Client-Secret": self.config["NAVER"]["SECRET"],
+            "X-NCP-APIGW-API-KEY-ID": self.config["NAVER"]["CLIENT_ID"],
+            "X-NCP-APIGW-API-KEY": self.config["NAVER"]["SECRET"],
         }
 
         params = {"query": keyword, "display": 10, "sort": "date"}

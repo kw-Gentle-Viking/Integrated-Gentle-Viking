@@ -3,6 +3,8 @@ import os
 from google import genai
 from app.models import RecommendationReport
 
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
+
 SYSTEM_PROMPT = """당신은 한국 주식 시장 AI 예측 분석가입니다.
 TFT(Temporal Fusion Transformer) 딥러닝 모델이 생성한 주가 예측 결과와
 모델 내부의 피처 중요도·어텐션 데이터를 바탕으로,
@@ -197,7 +199,7 @@ def generate_report(result: dict, ticker_name: str = "") -> str:
         # try를 Client 생성까지 넓혔다.
         client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
         resp = client.models.generate_content(
-            model="gemini-2.5-flash",
+            model=GEMINI_MODEL,
             contents=user_prompt,
             config={"system_instruction": SYSTEM_PROMPT},
         )
@@ -323,12 +325,12 @@ TFT는 최근 가격·거래량·시계열 패턴 기반의 단기 방향성이�
         client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
         try:
             resp = client.models.generate_content(
-                model="gemini-2.5-flash",
+                model=GEMINI_MODEL,
                 contents=prompt,
                 config={"response_mime_type": "application/json"},
             )
         except TypeError:
-            resp = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
+            resp = client.models.generate_content(model=GEMINI_MODEL, contents=prompt)
 
         text = (resp.text or "").strip()
         if text.startswith("```"):
