@@ -223,6 +223,7 @@ class TradeLog(Base):
     strategy_id: Mapped[str] = mapped_column(String(50)) # rsi_reversal 등
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
     status : Mapped[str] = mapped_column(String(10), default="FILLED") # FILLED | FAILED
+    order_no: Mapped[str | None] = mapped_column(String(32), nullable=True)  # KIS 주문번호(ODNO)
     
     user: Mapped["User"] = relationship(back_populates="trade_logs")
 

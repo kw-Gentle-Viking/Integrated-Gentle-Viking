@@ -35,6 +35,8 @@ from app.shared_state import ai_signal_event, warmup_events, warmup_received, wa
 
 router = APIRouter()
 
+MARKET_ORDER_TYPE = "01"  # mojito/KIS: ORD_DVSN 01 = 시장가
+
 # 유저별 자동매매 상태 저장 (메모리)
 active_tasks: dict[int, asyncio.Task] = {}
 active_demo_trades: set[int] = set()
@@ -445,6 +447,7 @@ async def trading_loop(user_id: int, tickers: list[str], persona_id: int,
                             MAX_RETRY = 3
                             RETRY_DELAY = 10
                             order_status = "FAILED"
+                            order_no = None
 
                             for attempt in range(MAX_RETRY):
                                 try : 
@@ -458,15 +461,18 @@ async def trading_loop(user_id: int, tickers: list[str], persona_id: int,
                                     # 반영되므로, 스레드로 넘겨 이벤트 루프 자체는 막지 않는다.
                                     resp = await asyncio.to_thread(
                                         broker.create_order,
+                                        side=order_signal.lower(),
                                         symbol=ticker,
-                                        side=order_signal,
-                                        qty=qty,
-                                        order_type="market",
+                                        price=0,
+                                        quantity=qty,
+                                        order_type=MARKET_ORDER_TYPE,
                                     )
                                     if resp.get("rt_cd") != "0":
                                         raise Exception(resp.get("msg1"))
 
                                     order_status = "FILLED"
+
+                                    order_no = (resp.get("output") or {}).get("ODNO")
                                     print(f"  {ticker}: {order_signal} 체결 | qty={qty} | {qty*close:,}원")
                                     break
                                 except Exception as e : 
@@ -490,6 +496,7 @@ async def trading_loop(user_id: int, tickers: list[str], persona_id: int,
                                     ai_confidence=confidence,
                                     strategy_id=strategies[ticker].__class__.__name__,
                                     status = order_status, 
+                                    order_no=order_no,
                             ))
                             add_auto_decision(
                                 db, user_id, ticker, "ORDER_SUBMITTED", order_status,
