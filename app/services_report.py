@@ -1,9 +1,23 @@
 # app/services_report.py
 import os
+import time
 from google import genai
 from app.models import RecommendationReport
 
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
+# 일시 장애(503 과부하 등)만 재시도한다. 그 밖의 오류(잘못된 키·모델 404 등)는 즉시 실패.
+RETRYABLE_CODES = {429, 500, 503, 504}
+
+
+def _call_gemini(client, **kwargs):
+    attempts = int(os.getenv("GEMINI_RETRY_ATTEMPTS", "3"))
+    for i in range(attempts):
+        try:
+            return client.models.generate_content(**kwargs)
+        except Exception as e:
+            if i == attempts - 1 or getattr(e, "code", None) not in RETRYABLE_CODES:
+                raise
+            time.sleep(2 ** i)
 
 SYSTEM_PROMPT = """당신은 한국 주식 시장 AI 예측 분석가입니다.
 TFT(Temporal Fusion Transformer) 딥러닝 모델이 생성한 주가 예측 결과와
@@ -198,7 +212,8 @@ def generate_report(result: dict, ticker_name: str = "") -> str:
         # 됐다(실제 서버에 요청을 보내 재현/확인함, 2026-10-03). generate_content 호출만 감싸던
         # try를 Client 생성까지 넓혔다.
         client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-        resp = client.models.generate_content(
+        resp = _call_gemini(
+            client,
             model=GEMINI_MODEL,
             contents=user_prompt,
             config={"system_instruction": SYSTEM_PROMPT},
@@ -324,13 +339,14 @@ TFT는 최근 가격·거래량·시계열 패턴 기반의 단기 방향성이�
 
         client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
         try:
-            resp = client.models.generate_content(
+            resp = _call_gemini(
+                client,
                 model=GEMINI_MODEL,
                 contents=prompt,
                 config={"response_mime_type": "application/json"},
             )
         except TypeError:
-            resp = client.models.generate_content(model=GEMINI_MODEL, contents=prompt)
+            resp = _call_gemini(client, model=GEMINI_MODEL, contents=prompt)
 
         text = (resp.text or "").strip()
         if text.startswith("```"):
