@@ -22,5 +22,7 @@ from=$(date -d '-14 days' +%F)  # 저장 구간 시작. 룩백(120영업일)은 
 $PY -m features.build_features --start "$from" --end "$today" || { echo "build_features failed"; exit 1; }
 # 매크로 파생 11개(kospi_ret 등)는 build_features가 쓰지 않아서 새 행이 NULL로 남는다 -> 매번 채운다
 $PY -m features.add_macro_features || { echo "add_macro_features failed"; exit 1; }
+# 레버리지 NAV·상장주식수·추정 AUM 일별 스냅샷 (과거 AUM은 KIS에 없어서 매일 쌓는다). 실패해도 갱신은 계속.
+$PY -m data_collection.snapshot_leverage_aum || echo "WARN: leverage AUM snapshot failed"
 
 echo "[$(date '+%F %T')] done"
