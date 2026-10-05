@@ -14,7 +14,10 @@ from datetime import date
 import psycopg2
 import psycopg2.extras
 
-PROD_DSN = os.getenv("PROD_STOCK_DB_DSN", "postgresql://localhost/stock_db")
+# 비밀번호를 코드에 두지 않는다. .env 의 PROD_STOCK_DB_DSN 필수.
+PROD_DSN = os.getenv("PROD_STOCK_DB_DSN")
+if not PROD_DSN:
+    raise RuntimeError("PROD_STOCK_DB_DSN 환경변수가 없습니다 (.env 확인)")
 
 # (table, columns, date_col, ticker_filtered, select_exprs)
 TABLES = [
