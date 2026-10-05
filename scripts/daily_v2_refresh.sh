@@ -18,7 +18,7 @@ echo "[$(date '+%F %T')] start daily v2 refresh"
 
 $PY -m data_collection.sync_v2_from_prod || { echo "sync failed"; exit 1; }
 $PY -m data_collection.run_leverage_backfill || echo "leverage backfill failed (continuing)"
-from=$(date -d '-90 days' +%F)
+from=$(date -d '-14 days' +%F)  # 저장 구간 시작. 룩백(120영업일)은 build_features가 영업일로 따로 읽는다
 $PY -m features.build_features --start "$from" --end "$today" || { echo "build_features failed"; exit 1; }
 
 echo "[$(date '+%F %T')] done"

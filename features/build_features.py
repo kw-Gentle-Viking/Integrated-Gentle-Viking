@@ -621,14 +621,60 @@ def aggregate_leverage_features(leverage_daily_df: pd.DataFrame, leverage_produc
     return leverage_features
 
 
+def closed_market_days(calendar_df: pd.DataFrame) -> set:
+    """calendar 의 휴장일(is_market_open=0) 집합. 빈 달력이면 중단한다(휴장일을 모른 채 피처를 만들지 않도록)."""
+    if calendar_df.empty:
+        raise RuntimeError("calendar 가 비어 있음 -- 휴장일을 알 수 없어 피처를 만들지 않는다")
+    return set(calendar_df.loc[calendar_df['is_market_open'] == 0, 'trade_date'])
+
+
+def drop_closed_days(df: pd.DataFrame, closed: set, col: str = 'trade_date') -> pd.DataFrame:
+    """휴장일 행을 뺀다. 피처(shift/rolling)는 행 순서 기준이라, 휴장일 행이 하나라도 남으면 영업일 기준이 깨진다."""
+    if df.empty:
+        return df
+    keep = ~df[col].isin(closed)
+    if (~keep).any():
+        print(f"  휴장일 행 제외: {int((~keep).sum())}행")
+    return df[keep]
+
+
+LOOKBACK_TRADING_DAYS = 120  # 가장 긴 롤링 창(60영업일) + 여유. 달력일이 아니라 영업일로 센다.
+
+
+def lookback_start(open_days, upsert_from: pd.Timestamp, n: int = LOOKBACK_TRADING_DAYS) -> pd.Timestamp:
+    """upsert_from 직전 n번째 영업일. open_days 는 정렬된 개장일 목록."""
+    earlier = [d for d in open_days if d < upsert_from]
+    if len(earlier) < n:
+        raise RuntimeError(f"영업일 {n}개 이전 데이터가 없음 (기준 {upsert_from.date()}) -- 롤링 피처를 만들 수 없다")
+    return earlier[-n]
+
+
 def build_feature_pool(dsn: str, start_date: str, end_date: str) -> None:
-    """Build feature_pool table by joining all features."""
+    """Build feature_pool table by joining all features.
+
+    start_date~end_date 행만 저장한다. 입력은 start 직전 LOOKBACK_TRADING_DAYS 영업일부터 읽어서
+    롤링 창(60일 등)이 항상 충분한 과거를 갖게 한다. 짧게 잘린 창으로 계산한 행을 저장하지 않는다."""
 
     print(f"Loading data from {start_date} to {end_date}...")
 
+    upsert_from = pd.Timestamp(start_date)
+    # 휴장일 기준은 운영 DB 달력(실제 KRX 휴일). AI DB calendar 는 평일 기준이라 휴일을 못 잡는다.
+    cal_dsn = os.getenv("PROD_STOCK_DB_DSN")
+    if not cal_dsn:
+        raise RuntimeError("PROD_STOCK_DB_DSN 이 없음 -- 휴장일을 알 수 없어 피처를 만들지 않는다")
+    cal_all = load_calendar(cal_dsn, "2019-01-01", end_date)
+    open_days = sorted(cal_all.loc[cal_all['is_market_open'] == 1, 'trade_date'])
+    load_start = lookback_start(open_days, upsert_from)
+    print(f"  룩백: {load_start.date()} ~ 저장 구간 시작 {upsert_from.date()} ({LOOKBACK_TRADING_DAYS} 영업일)")
+    start_date = load_start.strftime('%Y-%m-%d')
+
+    calendar_df = load_calendar(cal_dsn, start_date, end_date)
+    print(f"  Loaded {len(calendar_df)} calendar rows (기준: 운영 DB)")
+    closed = closed_market_days(calendar_df)
+
     # Load all data
-    price_df = load_price_daily(dsn, start_date, end_date)
-    print(f"  Loaded {len(price_df)} price_daily rows")
+    price_df = drop_closed_days(load_price_daily(dsn, start_date, end_date), closed)
+    print(f"  Loaded {len(price_df)} price_daily rows (휴장일 제외)")
 
     market_global_df = load_market_global(dsn, start_date, end_date)
     print(f"  Loaded {len(market_global_df)} market_global rows")
@@ -636,11 +682,8 @@ def build_feature_pool(dsn: str, start_date: str, end_date: str) -> None:
     market_index_df = load_market_index_daily(dsn, start_date, end_date)
     print(f"  Loaded {len(market_index_df)} market_index_daily rows")
 
-    sector_df = load_sector_daily_ohlcv(dsn, start_date, end_date)
-    print(f"  Loaded {len(sector_df)} sector_daily_ohlcv rows")
-
-    calendar_df = load_calendar(dsn, start_date, end_date)
-    print(f"  Loaded {len(calendar_df)} calendar rows")
+    sector_df = drop_closed_days(load_sector_daily_ohlcv(dsn, start_date, end_date), closed)
+    print(f"  Loaded {len(sector_df)} sector_daily_ohlcv rows (휴장일 제외)")
 
     market_events_df = load_market_events(dsn, start_date, end_date)
     print(f"  Loaded {len(market_events_df)} market_events rows")
@@ -704,7 +747,8 @@ def build_feature_pool(dsn: str, start_date: str, end_date: str) -> None:
     feature_pool = feature_pool.loc[feature_pool.groupby(['ticker', 'trade_date'])['_non_null_count'].idxmax()]
     feature_pool = feature_pool.drop('_non_null_count', axis=1)
 
-    print(f"Built feature_pool with {len(feature_pool)} rows, {len(feature_pool.columns)} columns")
+    feature_pool = feature_pool[feature_pool['trade_date'] >= upsert_from]
+    print(f"Built feature_pool with {len(feature_pool)} rows (저장 구간만), {len(feature_pool.columns)} columns")
 
     # Upsert to database
     print("Upserting to feature_pool table...")
