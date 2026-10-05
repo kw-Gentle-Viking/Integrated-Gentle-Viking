@@ -56,11 +56,16 @@ def resolve_cache_path(cache_path: str, label_col: str = "label") -> str:
 # caches were moved to training/artifacts/old_unadj_caches/.
 DATA_VERSION = "adj1"
 
+# 학습 원천 테이블. 기본값은 운영 feature_pool. 이벤트 플래그를 바로잡은 후보 실험은
+# FEATURE_POOL_TABLE=feature_pool_evtfix 로 돌리고, 캐시 이름에도 테이블명이 붙어 섞이지 않는다.
+FEATURE_POOL_TABLE = os.getenv("FEATURE_POOL_TABLE", "feature_pool")
+
 
 def versioned_cache_path(cache_path: str, label_col: str = "label") -> str:
     """Effective on-disk cache path: label-specific naming (resolve_cache_path) + DATA_VERSION suffix."""
     stem, ext = os.path.splitext(resolve_cache_path(cache_path, label_col))
-    return f"{stem}__{DATA_VERSION}{ext}"
+    table_tag = "" if FEATURE_POOL_TABLE == "feature_pool" else f"__{FEATURE_POOL_TABLE}"
+    return f"{stem}__{DATA_VERSION}{table_tag}{ext}"
 
 
 def query_feature_pool(dsn: str, start_date: str, end_date: str, label_col: str = "label") -> pd.DataFrame:
@@ -76,7 +81,7 @@ def query_feature_pool(dsn: str, start_date: str, end_date: str, label_col: str 
     col_sql = ", ".join(cols)
     query = f"""
         SELECT ticker, trade_date, {col_sql}, {label_select_expr(label_col)}
-        FROM feature_pool
+        FROM {FEATURE_POOL_TABLE}
         WHERE trade_date >= %s AND trade_date <= %s
         ORDER BY ticker, trade_date
     """
