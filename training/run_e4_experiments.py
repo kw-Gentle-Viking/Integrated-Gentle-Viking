@@ -763,6 +763,11 @@ def main(argv=None, data=None) -> int:
     device = torch.device(args.device or ("cuda" if torch.cuda.is_available() else "cpu"))
     with open(tfx.CHAMPION_CONFIG_PATH) as f:
         champion = json.load(f)
+    # 실험용: E4_DROP_COLS=col1,col2 로 입력 열을 뺀다 (챔피언 설정 파일은 건드리지 않는다).
+    drop = [c for c in os.environ.get("E4_DROP_COLS", "").split(",") if c.strip()]
+    if drop:
+        champion = dict(champion, columns=[c for c in champion["columns"] if c not in drop])
+        logger.info("E4_DROP_COLS: removed %s -> %d input columns", drop, len(champion["columns"]))
     hp = {k: champion[k] for k in ("state_size", "attention_heads", "lstm_layers", "dropout", "lr")}
     if data is None:
         dsn = os.environ.get("STOCK_DB_V2_DSN")
