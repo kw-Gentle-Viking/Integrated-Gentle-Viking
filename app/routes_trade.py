@@ -19,6 +19,7 @@ from app.models import User,TradeLog,Basket,LiveCandle,ManualTradeLock,AutoTrade
 from app.ai_client import AIClient
 from app.services_allocation import allocate_portfolio
 from app.routes_ai_command import command_queue
+from app.market_calendar import is_market_open_day
 from datetime import datetime
 
 from pydantic import BaseModel
@@ -560,6 +561,16 @@ class TradeRequest(BaseModel):
     allocation: AllocationConfig = AllocationConfig()
 
 
+def _ensure_market_open_today() -> None:
+    """휴장일이면 자동매매를 시작하지 않는다. 달력을 모르면 평일이면 통과(추론 서버 가드와 같은 기준)."""
+    today = datetime.now().date()
+    if is_market_open_day(today) is False:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{today.isoformat()}은(는) 휴장일입니다. 다음 개장일에 시작해 주세요.",
+        )
+
+
 @router.post("/start")
 async def start_trading(
     payload: TradeRequest,
@@ -579,6 +590,7 @@ async def start_trading(
     if user_id in active_tasks and not active_tasks[user_id].done():
         return {"status": "ALREADY_RUNNING", "message": "이미 자동매매 실행 중"}
 
+    _ensure_market_open_today()
     sync_request_basket(db, user_id, payload)
     items, excluded_manual_tickers, excluded_unsupported_tickers = get_auto_trade_basket_items(db, user_id)
     if not items and (excluded_manual_tickers or excluded_unsupported_tickers):
@@ -712,14 +724,7 @@ async def stop_trading(current_user: User = Depends(get_current_user)):
         })
         return {"status": "STOPPED", "message": "데모 자동매매 중단: AI 서버에 STOP 커맨드를 전달했습니다."}
 
-    command_queue.append({
-        "command": "STOP",
-        "user_id": current_user.id,
-        "tickers": [],
-        "created_at": datetime.now().isoformat(),
-        "status": "pending",
-    })
-
+    # 실행 중이 아니면 STOP을 보내지 않는다. 보내면 추론 서버의 종목 등록이 이유 없이 지워진다(2026-10-05).
     return {"status": "NOT_RUNNING", "message": "실행 중인 자동매매 없음"}
 
 @router.post("/once")
@@ -729,6 +734,7 @@ async def execute_once(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    _ensure_market_open_today()
     sync_request_basket(db, current_user.id, payload)
     items, excluded_manual_tickers, excluded_unsupported_tickers = get_auto_trade_basket_items(db, current_user.id)
     if not items and (excluded_manual_tickers or excluded_unsupported_tickers):

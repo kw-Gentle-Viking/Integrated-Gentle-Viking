@@ -14,7 +14,6 @@ def _user(uid=1):
     return SimpleNamespace(id=uid)
 
 
-@pytest.mark.xfail(strict=True, reason="실행 중이 아니어도 STOP 을 큐에 넣음 (10/5 사고 원인 후보)")
 def test_stop_when_nothing_running_still_queues_stop(monkeypatch):
     """실행 중이 아닐 때 /trade/stop 이 STOP 을 큐에 넣으면, 추론 서버 등록이 이유 없이 지워진다(10/5 사고)."""
     monkeypatch.setattr(rt, "active_tasks", {})
@@ -25,11 +24,10 @@ def test_stop_when_nothing_running_still_queues_stop(monkeypatch):
     assert [c for c in rac.command_queue if c["command"] == "STOP"] == []
 
 
-@pytest.mark.xfail(strict=True, reason="장 휴일 여부(calendar)를 자동매매 시작에서 확인하지 않음")
 def test_start_trading_checks_market_calendar():
     import inspect
     src = inspect.getsource(rt.start_trading)
-    assert "calendar" in src or "is_market_open" in src or "is_trading_day" in src
+    assert "_ensure_market_open_today()" in src
 
 
 def test_ai_prediction_with_out_of_range_label_is_flagged(capsys):
