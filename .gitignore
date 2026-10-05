@@ -199,3 +199,6 @@ local_ai_artifacts/
 
 
 .env.gcp
+
+# KIS 실전 토큰 캐시 (재시작 시 재발급 제한 회피)
+.cache/

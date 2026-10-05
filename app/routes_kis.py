@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import math
 import os
 from datetime import datetime, timedelta
@@ -13,7 +14,10 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.demo import demo_mode_enabled
 from app.dependencies import get_current_user
+from app.kis_token_store import is_rate_limited, load_token, save_token, token_file_path
 from app.models import ManualTradeLock, User
+
+logger = logging.getLogger(__name__)
 
 _env_path = Path(__file__).resolve().parent.parent / ".env"
 load_dotenv(dotenv_path=_env_path, override=True)
@@ -191,6 +195,12 @@ async def get_real_access_token() -> str:
         if _real_token_cache["token"] and _real_token_cache["expires_at"] and _real_token_cache["expires_at"] > now:
             return _real_token_cache["token"]
 
+        # 재시작 직후에는 메모리 캐시가 비어 있으므로 파일에 남은 토큰을 먼저 쓴다(재발급 제한 회피).
+        stored = load_token(token_file_path(), now)
+        if stored:
+            _real_token_cache["token"], _real_token_cache["expires_at"] = stored
+            return _real_token_cache["token"]
+
         async with httpx.AsyncClient() as client:
             resp = await client.post(
                 f"{REAL_BASE_URL}/oauth2/tokenP",
@@ -201,11 +211,22 @@ async def get_real_access_token() -> str:
                 },
             )
             if resp.status_code != 200:
-                raise HTTPException(status_code=502, detail=f"KIS 실전 토큰 발급 실패: {resp.text}")
+                logger.warning("KIS 실전 토큰 발급 실패: status=%s body=%s", resp.status_code, resp.text)
+                if is_rate_limited(resp.text):
+                    raise HTTPException(
+                        status_code=503,
+                        detail="KIS 접근토큰 발급이 잠시 제한됐습니다(1분에 1회). 잠시 후 다시 시도하세요.",
+                        headers={"Retry-After": "60"},
+                    )
+                raise HTTPException(status_code=502, detail="KIS 실전 토큰 발급에 실패했습니다.")
             data = resp.json()
             _real_token_cache["token"] = data["access_token"]
             expires_in = int(data.get("expires_in", 86400))
             _real_token_cache["expires_at"] = now + timedelta(seconds=expires_in - 60)
+            try:
+                save_token(token_file_path(), _real_token_cache["token"], _real_token_cache["expires_at"])
+            except OSError as exc:
+                logger.warning("KIS 토큰 파일 저장 실패(메모리 캐시만 사용): %s", exc)
             return _real_token_cache["token"]
 
 
@@ -454,10 +475,26 @@ async def place_order(
 # GET /market/volume-rank
 # KIS: GET /uapi/domestic-stock/v1/quotations/volume-rank  (실전 도메인)
 #      tr_id: FHPST01710000
+_last_volume_rank: dict = {"data": None, "at": None}
+
+
 @router.get("/market/volume-rank")
 async def get_volume_rank():
     if demo_mode_enabled():
         return _demo_volume_rank()
+    try:
+        data = await _fetch_volume_rank()
+    except HTTPException as exc:
+        # KIS 토큰 제한·일시 오류면 직전에 성공한 순위를 돌려준다(없으면 오류를 그대로 전달).
+        if _last_volume_rank["data"] is None:
+            raise
+        logger.warning("거래량 순위 조회 실패, 직전 결과(%s) 사용: %s", _last_volume_rank["at"], exc.detail)
+        return _last_volume_rank["data"]
+    _last_volume_rank.update(data=data, at=datetime.now())
+    return data
+
+
+async def _fetch_volume_rank():
     token = await get_real_access_token()
     async with httpx.AsyncClient(timeout=10.0) as client:
         resp = await client.get(
@@ -484,7 +521,8 @@ async def get_volume_rank():
             },
         )
     if resp.status_code != 200:
-        raise HTTPException(status_code=resp.status_code, detail=resp.text)
+        logger.warning("거래량 순위 KIS 응답 오류: status=%s body=%s", resp.status_code, resp.text)
+        raise HTTPException(status_code=502, detail="거래량 순위 조회에 실패했습니다.")
     return resp.json()
 
 
