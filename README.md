@@ -143,10 +143,14 @@ fixed effect는 이 체크포인트의 val 윈도우 종목별 평균을 그대�
    4. 종목별로: 시세 없으면 SKIP → 확신도 미달이면 SKIP → 전략 주문이 없으면 HOLD → AI·전략 신호 불일치면 HOLD → 수량 계산 → `RiskManager` 확인(종목당·1회 주문·전체 노출) → KIS 주문(실패 시 10초 간격 3회 재시도) → 체결이면 포지션 갱신, `TradeLog`·`AutoTradeDecision` 기록, 종목마다 커밋.
    5. 예외는 종목 단위로 막고 다음 종목으로 진행한다.
 
-### 3. 현재 제약
+### 3. 현재 상태와 남은 제약 (2026-10-05 기준)
 
-- **KIS 계정 불일치**: 잔고 조회와 주문이 `INVALID_CHECK_ACNO`로 실패한다. 포지션 조회와 주문 단계가 실제로는 동작하지 않는다.
-- **수집 대상 파일**: 운영 수집기는 `/home/user/active_tickers.json`을 읽는다. 추론 대상으로 등록한 종목은 이 파일에도 있어야 수집된다.
-- **5분봉 워밍업**: 백엔드 요청을 AI가 처리하지 않아 사실상 비어 있다. 대기는 5초로 줄여 두었다.
-- **ONCE 경로**: 폴러(`poll_commands`)가 떠 있어야 동작한다.
-- **상한 5종목**: 추론(serving)·등록(serving, 백엔드 `/basket`·`/trade/*`)·프론트 장바구니에 적용돼 있다.
+- **KIS 모의계좌**: 잔고 조회 200 확인 완료. 계좌는 `50215383-01`(모의). 실주문은 `KIS_MOCK=true`에서만 나간다.
+- **체결 기록**: 주문 후 KIS 체결 조회(`inquire-daily-ccld`)로 체결 수량·평균가를 가져와 `TradeLog`에 기록한다(조회 실패 시 결정 시점 가격으로 대체).
+- **5분봉 워밍업**: 운영 DB `intraday_5min`의 최근 봉으로 시드한다(`app/intraday_seed.py`). 대기는 5초.
+- **수집 대상 파일**: 운영 수집기는 `/home/user/active_tickers.json`을 08:55 시작 시 한 번 읽는다. 추론 대상(`serving/active_tickers.json`)과 같은 종목이어야 한다(`scripts/preflight_check.sh`로 확인).
+- **ONCE 경로**: 폴러(`poll_commands`, 매분 크론)가 떠 있어야 동작한다.
+- **상한 5종목**: 추론(serving)·등록(serving, 백엔드 `/basket`·`/trade/*`)·프론트 장바구니에 적용돼 있다. 장바구니는 AI 유니버스(코스피 200)만 담을 수 있다.
+- **배분 정책**: `ALLOCATION_POLICY`의 a(`cap_cash`, 기본)와 b(`redistribute`) 비교는 10/6 이후 결정한다.
+- **리포트**: Gemini 일시 오류(429/5xx)는 재시도한다(`GEMINI_RETRY_ATTEMPTS`, 기본 3).
+- **미결**: 구글 로그인 콜백 URL 설정 위치, GCP 배포.
