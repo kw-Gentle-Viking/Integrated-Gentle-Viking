@@ -20,5 +20,7 @@ $PY -m data_collection.sync_v2_from_prod || { echo "sync failed"; exit 1; }
 $PY -m data_collection.run_leverage_backfill || echo "leverage backfill failed (continuing)"
 from=$(date -d '-14 days' +%F)  # 저장 구간 시작. 룩백(120영업일)은 build_features가 영업일로 따로 읽는다
 $PY -m features.build_features --start "$from" --end "$today" || { echo "build_features failed"; exit 1; }
+# 매크로 파생 11개(kospi_ret 등)는 build_features가 쓰지 않아서 새 행이 NULL로 남는다 -> 매번 채운다
+$PY -m features.add_macro_features || { echo "add_macro_features failed"; exit 1; }
 
 echo "[$(date '+%F %T')] done"
