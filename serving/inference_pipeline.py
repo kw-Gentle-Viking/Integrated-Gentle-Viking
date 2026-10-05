@@ -34,6 +34,7 @@ from datetime import datetime
 import requests
 
 from serving.limits import MAX_ACTIVE_TICKERS
+from serving.market_calendar import is_market_open_day
 
 from serving.feature_builder import build_encoder_df_for_ticker, fetch_today_intraday_rows
 from serving.inference import run_inference
@@ -50,11 +51,14 @@ AI_SERVER_API_KEY = os.environ.get("AI_SERVER_API_KEY", "dev-ai-key")  # 백엔�
 
 def load_active_tickers(tickers_file: str = TICKERS_FILE) -> list[str]:
     if not os.path.exists(tickers_file):
+        logger.warning("종목 파일이 없음: %s -> 이번 주기 추론 종목 0개", tickers_file)
         return []
     try:
         with open(tickers_file) as f:
             tickers = json.load(f).get("all_tickers", [])
-    except Exception:
+    except Exception as exc:  # noqa: BLE001
+        # 쓰는 중이거나 깨진 파일을 조용히 빈 목록으로 바꾸면 추론이 아무 말 없이 멈춘다.
+        logger.error("종목 파일 읽기 실패 (%s): %s -> 이번 주기 추론 종목 0개", tickers_file, exc)
         return []
     if len(tickers) > MAX_ACTIVE_TICKERS:
         logger.warning("활성 종목 %d개 > 상한 %d -> 앞의 %d개만 추론", len(tickers), MAX_ACTIVE_TICKERS, MAX_ACTIVE_TICKERS)
@@ -64,6 +68,9 @@ def load_active_tickers(tickers_file: str = TICKERS_FILE) -> list[str]:
 
 def is_within_market_hours(now: datetime) -> bool:
     if now.weekday() >= 5:
+        return False
+    # 휴장일(대체공휴일 포함)에는 추론하지 않는다. 달력을 못 읽으면 평일 기준으로 진행한다(2026-10-05 사고).
+    if is_market_open_day(now.date()) is False:
         return False
     market_open = now.replace(hour=9, minute=0, second=0, microsecond=0)
     market_close = now.replace(hour=15, minute=30, second=0, microsecond=0)

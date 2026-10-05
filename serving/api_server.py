@@ -80,9 +80,12 @@ def load_tickers() -> dict:
 
 def save_tickers(data: dict) -> None:
     data["updated_at"] = datetime.now().isoformat()
+    # 임시 파일에 쓴 뒤 원자적으로 교체한다. 추론 프로세스가 중간 상태(빈 파일)를 읽지 않도록 한다.
+    tmp = TICKERS_FILE + ".tmp"
     with _tickers_lock:
-        with open(TICKERS_FILE, "w") as f:
+        with open(tmp, "w") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
+        os.replace(tmp, TICKERS_FILE)
 
 
 # ============================================================

@@ -11,12 +11,12 @@ def test_weekend_is_skipped():
     assert ip.is_within_market_hours(datetime(2026, 10, 3, 10, 0)) is False
 
 
-@pytest.mark.xfail(strict=True, reason="추론 가드가 평일·시간만 보고 달력 휴장일을 모름 (10/5 대체공휴일에 추론 실행됨)")
-def test_holiday_is_skipped():
-    assert ip.is_within_market_hours(datetime(2026, 10, 5, 10, 0)) is False
+def test_calendar_unknown_falls_back_to_weekday_rule(monkeypatch):
+    """달력을 못 읽으면 평일 기준으로 진행한다(의도된 동작)."""
+    monkeypatch.delenv("PROD_STOCK_DB_DSN", raising=False)
+    assert ip.is_within_market_hours(datetime(2026, 10, 5, 10, 0)) is True
 
 
-@pytest.mark.xfail(strict=True, reason="종목 파일이 없으면 경고 없이 빈 목록을 돌려줌 -> 추론이 조용히 멈춤")
 def test_missing_ticker_file_is_logged_not_silent(tmp_path, monkeypatch, caplog):
     monkeypatch.setattr(ip, "TICKERS_FILE", str(tmp_path / "missing.json"), raising=False)
     caplog.set_level(logging.WARNING)
@@ -27,3 +27,20 @@ def test_missing_ticker_file_is_logged_not_silent(tmp_path, monkeypatch, caplog)
     out = fn(**kwargs)
     assert out == []
     assert any(r.levelno >= logging.WARNING for r in caplog.records)
+
+
+def test_registry_write_is_atomic_for_readers(tmp_path, monkeypatch):
+    """쓰는 도중에도 읽는 쪽은 항상 완전한 JSON을 본다(임시 파일 + os.replace)."""
+    import json
+    import serving.api_server as api
+    path = tmp_path / "active_tickers.json"
+    monkeypatch.setattr(api, "TICKERS_FILE", str(path))
+    api.save_tickers({"users": {"1": ["005930"]}, "all_tickers": ["005930"]})
+    assert not (tmp_path / "active_tickers.json.tmp").exists()
+    assert json.loads(path.read_text(encoding="utf-8"))["all_tickers"] == ["005930"]
+
+
+def test_holiday_blocks_inference_when_calendar_says_closed(monkeypatch):
+    from datetime import datetime as dt
+    monkeypatch.setattr(ip, "is_market_open_day", lambda d: False)
+    assert ip.is_within_market_hours(dt(2026, 10, 5, 10, 0)) is False

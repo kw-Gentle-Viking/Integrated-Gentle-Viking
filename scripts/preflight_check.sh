@@ -30,4 +30,10 @@ if [ -n "${KIS_ACC_NO:-}" ]; then
   [ "$code" = "200" ] && ok "KIS balance via backend" || fail "KIS balance via backend HTTP $code (계좌 불일치 미해결 시 예상된 실패)"
 fi
 
+# 가짜 행 점검(2026-10-05): 휴장일에 운영 가격 행이 있거나, 최신 개장일에 분봉이 없으면 경고
+closed=$(PGPASSWORD=0180 psql -h localhost -U stock_user -d stock_db -tAc "SELECT COUNT(*) FROM price_daily p JOIN calendar c ON c.base_date=p.trade_date WHERE c.is_market_open=0")
+[ "${closed:-0}" = "0" ] && ok "prod price_daily: no rows on closed days" || fail "prod price_daily: $closed rows on closed days (가짜 행 의심)"
+lastopen=$(PGPASSWORD=0180 psql -h localhost -U stock_user -d stock_db -tAc "SELECT MAX(base_date) FROM calendar WHERE is_market_open=1 AND base_date<=CURRENT_DATE")
+m1=$(PGPASSWORD=0180 psql -h localhost -U stock_user -d stock_db -tAc "SELECT COUNT(*) FROM intraday_1min WHERE datetime::date='$lastopen'")
+[ "${m1:-0}" -gt 0 ] && ok "intraday_1min has bars for last open day $lastopen" || warn "intraday_1min has no bars for last open day $lastopen"
 grep -q "^GEMINI_API_KEY=AQ" "$REPO/../../../team_repos/Back-Gentle-Viking/.env" 2>/dev/null && ok "gemini key set" || warn "gemini key not set"
