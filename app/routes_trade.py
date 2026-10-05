@@ -8,6 +8,8 @@ from app.limits import MAX_BASKET_TICKERS
 from app.intraday_seed import seed_live_candles
 from app.allocation_policy import allocation_policy, per_order_notional_cap
 from app.kis_orders import inquire_order_fill
+from app.kis_errors import KISOrderError, is_retryable
+from app.trade_lock import acquire as acquire_trade_lock, release as release_trade_lock
 import os as _os
 from datetime import date as _date
 from app.db import get_db,SessionLocal
@@ -475,7 +477,7 @@ async def trading_loop(user_id: int, tickers: list[str], persona_id: int,
                                         order_type=MARKET_ORDER_TYPE,
                                     )
                                     if resp.get("rt_cd") != "0":
-                                        raise Exception(resp.get("msg1"))
+                                        raise KISOrderError(resp.get("msg1") or "KIS 주문 실패", resp.get("msg_cd"))
 
                                     order_status = "FILLED"
 
@@ -484,6 +486,9 @@ async def trading_loop(user_id: int, tickers: list[str], persona_id: int,
                                     break
                                 except Exception as e : 
                                     print(f"   {ticker}: 주문 실패 ({attempt+1}/{MAX_RETRY}) - {e}")
+                                    if not is_retryable(e):
+                                        print(f"  {ticker}: 재시도해도 같은 결과(영구 오류) -> 중단")
+                                        break
                                     if attempt < MAX_RETRY - 1:
                                         await asyncio.sleep(RETRY_DELAY)
                                     else:
@@ -634,7 +639,11 @@ async def start_trading(
 
 
 
+    if not acquire_trade_lock(user_id):
+        return {"status": "ALREADY_RUNNING", "message": "이미 자동매매 실행 중 (다른 워커)"}
+
     if demo_mode_enabled() and not demo_autotrade_loop_enabled():
+        release_trade_lock(user_id)
         active_demo_trades.add(user_id)
         return {
             "status": "RUNNING",
@@ -656,6 +665,7 @@ async def start_trading(
         )
     )
     active_tasks[user_id] = task
+    task.add_done_callback(lambda _t: release_trade_lock(user_id))
 
     return {
         "status": "RUNNING",
@@ -681,6 +691,7 @@ async def stop_trading(current_user: User = Depends(get_current_user)):
         })
         active_tasks[user_id].cancel()
         del active_tasks[user_id]
+        release_trade_lock(user_id)
         active_demo_trades.discard(user_id)
         return {"status": "STOPPED", "message": "자동매매 중단"}
 

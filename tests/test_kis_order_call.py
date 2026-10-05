@@ -46,3 +46,24 @@ def test_smoke_order_refuses_non_universe_ticker(monkeypatch):
     with __import__("pytest").raises(HTTPException) as e:
         asyncio.run(rt.smoke_order(rt.SmokeOrderRequest(ticker="247540", side="buy"), SimpleNamespace(id=1)))
     assert e.value.status_code == 400
+
+
+def test_retry_only_transient_kis_failures():
+    import requests
+    from app.kis_errors import KISOrderError, is_retryable
+    assert is_retryable(KISOrderError("토큰 발급 1분당 1회", "EGW00133"))
+    assert is_retryable(KISOrderError("초당 거래건수 초과", "EGW00201"))
+    assert is_retryable(requests.exceptions.Timeout("timeout"))
+    assert is_retryable(ConnectionError("reset"))
+    assert not is_retryable(KISOrderError("모의투자 영업일이 아닙니다.", "40100000"))
+    assert not is_retryable(KISOrderError("주문가능금액 부족", "APBK0952"))
+    assert not is_retryable(Exception("KIS broker is not configured"))
+
+
+def test_trade_lock_is_exclusive_per_user_in_process():
+    from app.trade_lock import acquire, release
+    assert acquire(777) is True
+    assert acquire(777) is False  # 같은 유저는 두 번 잡을 수 없다
+    release(777)
+    assert acquire(777) is True
+    release(777)
