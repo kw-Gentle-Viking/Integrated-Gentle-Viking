@@ -64,6 +64,9 @@ def test_one_trading_cycle_places_order_and_records_it(monkeypatch, session_fact
     monkeypatch.setattr(rt, "load_live_positions", lambda b: {})
     monkeypatch.setattr(rt, "create_strategy", lambda symbol, sid, params=None: AlwaysBuyStrategy(symbol))
     monkeypatch.setattr(rt, "ai_signal_event", asyncio.Event())
+    monkeypatch.setattr(rt, "FILL_CHECK_DELAY_SEC", 0)
+    monkeypatch.setattr(rt, "inquire_order_fill", lambda b, odno, d, m: {
+        "ticker": "x", "ordered_qty": 1, "filled_qty": 1, "avg_price": 70_250.0})
     from app.shared_state import realtime_predictions
     tickers = ["005930", "000660", "035420"]
     for t in tickers:
@@ -105,6 +108,7 @@ def test_one_trading_cycle_places_order_and_records_it(monkeypatch, session_fact
     logs = db.query(TradeLog).all()
     assert len(logs) == 3
     assert all(l.side == "BUY" and l.status == "FILLED" and l.order_no == "0000123456" for l in logs)
+    assert all(l.price == 70_250.0 for l in logs)  # 체결 조회 평균가로 기록 (결정 시점 가격 아님)
     decisions = [d.action for d in db.query(AutoTradeDecision).all()]
     assert decisions.count("ORDER_SUBMITTED") == 3
     db.close()

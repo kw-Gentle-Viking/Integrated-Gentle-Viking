@@ -494,16 +494,22 @@ async def trading_loop(user_id: int, tickers: list[str], persona_id: int,
                                     else:
                                         print(f"  {ticker}: 최종 실패")
 
+                            fill = None
+                            if order_status == "FILLED" and order_no:
+                                fill = await _lookup_fill(order_no)
+                            exec_qty = int(fill["filled_qty"]) if fill and fill["filled_qty"] > 0 else int(qty)
+                            exec_price = float(fill["avg_price"]) if fill and fill["avg_price"] > 0 else float(close)
+
                             if order_status == "FILLED":
-                                apply_fill(portfolio, ticker, order_signal, qty, close)
+                                apply_fill(portfolio, ticker, order_signal, exec_qty, exec_price)
 
                             db.add(TradeLog(
                                     user_id=user_id,
                                     ticker=ticker,
                                     side=order_signal,
-                                    qty=int(qty),
-                                    price=close,
-                                    amount=int(qty * close),
+                                    qty=exec_qty,
+                                    price=exec_price,
+                                    amount=exec_qty * exec_price,
                                     ai_signal=signal,
                                     ai_confidence=confidence,
                                     strategy_id=strategies[ticker].__class__.__name__,
@@ -806,6 +812,22 @@ def get_trade_history(
         .limit(100).all()
 
     return [trade_log_to_dict(log) for log in logs]
+
+
+
+FILL_CHECK_DELAY_SEC = float(os.getenv("FILL_CHECK_DELAY_SEC", "3"))
+
+
+async def _lookup_fill(order_no: str) -> dict | None:
+    """주문 직후 체결 조회. 실패하면 None (호출부는 결정 시점 가격으로 되돌아간다)."""
+    if FILL_CHECK_DELAY_SEC > 0:
+        await asyncio.sleep(FILL_CHECK_DELAY_SEC)
+    try:
+        return await asyncio.to_thread(inquire_order_fill, broker, order_no,
+                                       datetime.now().strftime("%Y%m%d"), kis_is_mock())
+    except Exception as e:  # noqa: BLE001
+        print(f"  체결 조회 실패 (odno={order_no}): {e}")
+        return None
 
 
 class SmokeOrderRequest(BaseModel):
