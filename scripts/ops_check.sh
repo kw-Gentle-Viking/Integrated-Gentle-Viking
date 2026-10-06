@@ -14,6 +14,8 @@ mode=$1
 log(){ echo "$(date '+%F %T') [$1] $2" >> $STATUS; }
 
 set -a; . $REPO/.env; set +a
+# DB 접속 문자열(DATABASE_URL)은 백엔드 .env 에 있다
+[ "$mode" = "open" ] || [ "$mode" = "close" ] && { set -a; . $BACK/.env; set +a; }
 dow=$(date +%u)
 if [ "$mode" != "watchdog" ]; then
   [ "$dow" -ge 6 ] && exit 0
