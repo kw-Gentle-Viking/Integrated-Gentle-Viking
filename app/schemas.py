@@ -120,7 +120,7 @@ class RecommendationResponse(BaseModel):
 class AllocationConfig(BaseModel):
     max_weight: float = 0.30          # 한 종목 최대 비중 (기본 30%)
     cash_reserve: float = 0.10        # 현금 보유 비중 (기본 10%)
-    min_confidence: float = 0.60      # 최소 확신도 (기본 60%)
+    min_confidence: float = 0.40      # 최소 확신도 (기본 40%, 2026-10-06: 3분류 모델의 최대 확률이 0.35~0.42라 60%는 사실상 거래 0건)
     use_persona_boost: bool = True    # 페르소나 보정 사용 여부
 
 class TickerStrategy(BaseModel):
