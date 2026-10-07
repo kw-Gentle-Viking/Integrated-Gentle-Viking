@@ -4,10 +4,10 @@ from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
 
 
-def _log(status="FILLED"):
+def _log(status="FILLED", order_no=None):
     return SimpleNamespace(ticker="005930", side="BUY", qty=3, price=70000.0, amount=210000.0, ai_signal="BUY",
                            ai_confidence=0.7, strategy_id="ConservativeStrategy",
-                           created_at=datetime(2026, 9, 28, 10, 0), status=status)
+                           created_at=datetime(2026, 9, 28, 10, 0), status=status, order_no=order_no)
 
 
 # 1) 실패한 주문이 체결처럼 보이던 문제: /trade/history 응답에 status 를 포함한다
@@ -23,6 +23,13 @@ def test_trade_log_dict_defaults_missing_status_to_filled_for_legacy_rows():
     from app.trade_helpers import trade_log_to_dict
     log = _log(); log.status = None
     assert trade_log_to_dict(log)["status"] == "FILLED"
+
+
+# 체결 로그를 "언제 어떤 종목이 어떻게 처리됐는지" 보여주는 활동 로그에서, 체결을 추적할 주문번호가 빠져 있었다
+def test_trade_log_dict_includes_order_no_for_fill_traceability():
+    from app.trade_helpers import trade_log_to_dict
+    assert trade_log_to_dict(_log(order_no="0000123456"))["order_no"] == "0000123456"
+    assert trade_log_to_dict(_log())["order_no"] is None
 
 
 # 2) 프론트가 보내는 strategy_id(rsi_reversal 등)가 조용히 conservative 로 바뀌던 문제: 대체 사실을 드러낸다

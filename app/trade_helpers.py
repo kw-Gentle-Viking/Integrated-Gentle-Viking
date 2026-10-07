@@ -13,6 +13,7 @@ def trade_log_to_dict(log) -> dict:
         "ai_confidence": log.ai_confidence,
         "strategy_id": log.strategy_id,
         "status": log.status or "FILLED",   # 컬럼 도입 전 행은 체결로 간주
+        "order_no": log.order_no,
         "created_at": log.created_at.isoformat(),
     }
 
