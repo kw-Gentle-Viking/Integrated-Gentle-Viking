@@ -4,8 +4,26 @@
 그대로 읽어 이 상태를 채운다."""
 import pytest
 
-from app.kis_positions import apply_fill, load_live_positions, parse_balance_positions
+from app.kis_positions import apply_fill, ensure_fresh_token, load_live_positions, parse_balance_positions
 from backtest.engine.risk import Portfolio
+
+
+class _TokenStub:
+    """mojito 토큰 메서드만 흉내낸다. load_live_positions가 매 사이클 호출하므로 다른 가짜 broker들도
+    이걸 섞어 쓴다."""
+    def __init__(self, valid: bool):
+        self.valid = valid
+        self.loaded = False
+        self.issued = False
+
+    def check_access_token(self):
+        return self.valid
+
+    def load_access_token(self):
+        self.loaded = True
+
+    def issue_access_token(self):
+        self.issued = True
 
 
 def test_parse_balance_positions_builds_position_per_held_ticker():
@@ -38,22 +56,44 @@ def test_load_live_positions_raises_when_broker_not_configured():
 
 
 def test_load_live_positions_propagates_broker_fetch_failures():
-    class FailingBroker:
+    class FailingBroker(_TokenStub):
         def fetch_balance(self):
             raise ConnectionError("KIS 연결 실패")
 
     with pytest.raises(ConnectionError):
-        load_live_positions(FailingBroker())
+        load_live_positions(FailingBroker(valid=True))
 
 
 def test_load_live_positions_parses_real_broker_response_shape():
-    class FakeBroker:
+    class FakeBroker(_TokenStub):
         def fetch_balance(self):
             return {"output1": [{"pdno": "005930", "hldg_qty": "3", "pchs_avg_pric": "71000"}],
                     "output2": [{"dnca_tot_amt": "1000000"}]}
 
-    positions = load_live_positions(FakeBroker())
+    positions = load_live_positions(FakeBroker(valid=True))
     assert positions["005930"].qty == 3
+
+
+# ---- ensure_fresh_token: 장시간 실행되는 프로세스에서 만료된 토큰이 그대로 남는 사고 (2026-10-07) ----
+def test_ensure_fresh_token_reloads_when_cached_token_still_valid():
+    broker = _TokenStub(valid=True)
+    ensure_fresh_token(broker)
+    assert broker.loaded is True and broker.issued is False
+
+
+def test_ensure_fresh_token_reissues_when_cached_token_expired():
+    broker = _TokenStub(valid=False)
+    ensure_fresh_token(broker)
+    assert broker.issued is True and broker.loaded is False
+
+
+def test_load_live_positions_refreshes_token_before_fetching_balance():
+    class FakeBroker(_TokenStub):
+        def fetch_balance(self):
+            assert self.loaded or self.issued, "fetch_balance 전에 토큰을 갱신해야 한다"
+            return {"output1": []}
+
+    load_live_positions(FakeBroker(valid=False))
 
 
 # ---- apply_fill: 같은 사이클 내 즉시 반영 (다음 KIS 조회를 기다리지 않음) ----

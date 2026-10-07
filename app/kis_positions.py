@@ -35,10 +35,24 @@ def apply_fill(portfolio, ticker: str, side: str, qty: float, price: float) -> N
             pos.entry_price = 0
 
 
+def ensure_fresh_token(broker) -> None:
+    """mojito는 broker 생성 시점에만 토큰을 발급·적재한다. 이 백엔드는 며칠씩 재시작 없이 돌아서,
+    토큰이 자정을 넘겨 만료된 뒤에도 broker.access_token이 그 만료된 값으로 계속 남아 있었다
+    (2026-10-07: KIS가 에러 응답을 주면서 tr_cont 헤더도 안 줘서 mojito가 KeyError('tr_cont')를 내고,
+    매 사이클 포지션 조회가 전부 실패해 자동매매가 하루 종일 한 건도 판단을 못 했다).
+    매 사이클 전에 파일 캐시(token.dat) 기준으로 다시 맞춘다: 아직 유효하면 그 값을 적재하고,
+    만료됐으면 새로 발급한다."""
+    if broker.check_access_token():
+        broker.load_access_token()
+    else:
+        broker.issue_access_token()
+
+
 def load_live_positions(broker) -> dict[str, Position]:
     """실패하면 예외를 그대로 올린다 -- 포지션을 모르는 채로 '빈 상태'로 조용히 넘어가면 이 모듈이
     고치려는 버그(포지션 추적 없음)가 그대로 재현된다. 호출부는 이 사이클을 스킵해야 한다."""
     if not broker:
         raise RuntimeError("KIS broker is not configured")
+    ensure_fresh_token(broker)
     balance = broker.fetch_balance()
     return parse_balance_positions(balance)

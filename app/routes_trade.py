@@ -14,7 +14,7 @@ import os as _os
 from datetime import date as _date
 from app.db import get_db,SessionLocal
 from app.dependencies import get_current_user
-from app.kis_positions import apply_fill, load_live_positions
+from app.kis_positions import apply_fill, ensure_fresh_token, load_live_positions
 from app.models import User,TradeLog,Basket,LiveCandle,ManualTradeLock,AutoTradeDecision
 from app.ai_client import AIClient
 from app.services_allocation import allocate_portfolio
@@ -75,6 +75,7 @@ def get_balance() -> int:
         return 10_000_000  # KIS 미연결 시 로컬 시연 기본값
 
     try:
+        ensure_fresh_token(broker)
         resp = broker.fetch_balance()
         if resp and "output2" in resp and len(resp["output2"]) > 0:
             data = resp["output2"][0]
