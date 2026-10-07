@@ -6,6 +6,7 @@ import PortfolioAside from "@/components/portfolio/PortfolioAside";
 import PortfolioStockTradeModal from "@/components/portfolio/PortfolioStockTradeModal";
 import PortfolioSummaryCards from "@/components/portfolio/PortfolioSummaryCards";
 import PortfolioTable from "@/components/portfolio/PortfolioTable";
+import TradeActivityTerminal from "@/components/portfolio/TradeActivityTerminal";
 import { StockListItem, useStockList } from "@/lib/stock-list/StockListContext";
 import { apiFetch } from "@/lib/signup/auth";
 import { isOnceJobDone } from "@/lib/ai/predictionJobStore";
@@ -24,6 +25,7 @@ type TradeLog = {
   ai_confidence: number;
   strategy_id: string;
   status?: string;
+  order_no?: string | null;
   created_at: string;
 };
 
@@ -581,6 +583,8 @@ export default function PortfolioPage() {
                   </div>
                 )}
               </div>
+
+              <TradeActivityTerminal decisions={tradeDecisions} fills={tradeLogs} />
 
               <div className="mt-6 overflow-hidden rounded-xl border border-slate-100">
                 <div className="flex items-center gap-2 bg-slate-50 px-5 py-3 text-sm font-black text-slate-700">
