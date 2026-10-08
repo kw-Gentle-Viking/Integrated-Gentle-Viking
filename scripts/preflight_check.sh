@@ -1,6 +1,6 @@
 #!/bin/bash
 # 10/6 장 시작 전 점검 (읽기 전용). 각 항목 OK / WARN / FAIL 출력.
-REPO=/home/user/AI_Gentle_Viking_RE/.worktrees/ai-model-redesign
+REPO=/home/user/AI_Gentle_Viking_RE
 set -a; . "$REPO/.env"; set +a
 ok(){ echo "OK    $1"; }; warn(){ echo "WARN  $1"; }; fail(){ echo "FAIL  $1"; }
 
@@ -36,4 +36,4 @@ closed=$(PGPASSWORD=0180 psql -h localhost -U stock_user -d stock_db -tAc "SELEC
 lastopen=$(PGPASSWORD=0180 psql -h localhost -U stock_user -d stock_db -tAc "SELECT MAX(base_date) FROM calendar WHERE is_market_open=1 AND base_date<=CURRENT_DATE")
 m1=$(PGPASSWORD=0180 psql -h localhost -U stock_user -d stock_db -tAc "SELECT COUNT(*) FROM intraday_1min WHERE datetime::date='$lastopen'")
 [ "${m1:-0}" -gt 0 ] && ok "intraday_1min has bars for last open day $lastopen" || warn "intraday_1min has no bars for last open day $lastopen"
-grep -q "^GEMINI_API_KEY=AQ" "$REPO/../../../team_repos/Back-Gentle-Viking/.env" 2>/dev/null && ok "gemini key set" || warn "gemini key not set"
+grep -q "^GEMINI_API_KEY=AQ" "/home/user/team_repos/Back-Gentle-Viking/.env" 2>/dev/null && ok "gemini key set" || warn "gemini key not set"
