@@ -4,7 +4,7 @@
 #   watchdog  : 백엔드(8000)·추론 API(8001) 가 죽었으면 다시 띄운다
 #   open      : 장 시작 후 추론·신호가 들어왔는지
 #   close     : 장 마감 후 하루 요약
-REPO=/home/user/AI_Gentle_Viking_RE/.worktrees/ai-model-redesign
+REPO=/home/user/AI_Gentle_Viking_RE
 BACK=/home/user/team_repos/Back-Gentle-Viking
 LOGDIR=/home/user/ops_logs
 STATUS=$LOGDIR/status.log
@@ -19,8 +19,16 @@ set -a; . $REPO/.env; set +a
 dow=$(date +%u)
 if [ "$mode" != "watchdog" ]; then
   [ "$dow" -ge 6 ] && exit 0
-  open_day=$($PY -W ignore -c "from datetime import date; from serving.market_calendar import is_market_open_day as f; print(f(date.today()))" 2>/dev/null)
-  [ "$open_day" = "False" ] && { log INFO "$mode: 휴장일 -> 건너뜀"; exit 0; }
+  open_day_err=$(mktemp)
+  open_day=$($PY -W ignore -c "from datetime import date; from serving.market_calendar import is_market_open_day as f; print(f(date.today()))" 2>"$open_day_err")
+  [ "$open_day" = "False" ] && { log INFO "$mode: 휴장일 -> 건너뜀"; rm -f "$open_day_err"; exit 0; }
+  # True도 False도 아니면(빈 값/예외) 휴장일인지 모른다는 뜻 -- 장이 열린 것처럼 진행해서 거짓 FAIL을
+  # 내지 않고, 원인을 남긴 채 건너뛴다(2026-10-09 한 번 이렇게 거짓 FAIL이 찍힌 적 있음).
+  if [ "$open_day" != "True" ]; then
+    log WARN "$mode: 휴장일 판정 실패(원인: $(tail -c 300 "$open_day_err" | tr '\n' ' ')) -> 건너뜀"
+    rm -f "$open_day_err"; exit 0
+  fi
+  rm -f "$open_day_err"
 fi
 
 case "$mode" in
