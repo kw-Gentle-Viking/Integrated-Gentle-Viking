@@ -20,7 +20,7 @@ dow=$(date +%u)
 if [ "$mode" != "watchdog" ]; then
   [ "$dow" -ge 6 ] && exit 0
   open_day_err=$(mktemp)
-  open_day=$($PY -W ignore -c "from datetime import date; from serving.market_calendar import is_market_open_day as f; print(f(date.today()))" 2>"$open_day_err")
+  open_day=$(cd $REPO && PYTHONPATH=. $PY -W ignore -c "from datetime import date; from serving.market_calendar import is_market_open_day as f; print(f(date.today()))" 2>"$open_day_err")
   [ "$open_day" = "False" ] && { log INFO "$mode: 휴장일 -> 건너뜀"; rm -f "$open_day_err"; exit 0; }
   # True도 False도 아니면(빈 값/예외) 휴장일인지 모른다는 뜻 -- 장이 열린 것처럼 진행해서 거짓 FAIL을
   # 내지 않고, 원인을 남긴 채 건너뛴다(2026-10-09 한 번 이렇게 거짓 FAIL이 찍힌 적 있음).
