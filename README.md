@@ -140,6 +140,8 @@
 
 - `docs/capstone_overview_for_presentation.md`: 발표용 — 설계 의도와 실제 데이터 해석 위주로
   정리한 프로젝트 개요(이 README의 보완판)
+- `docs/single_cycle_trace_example.md`: 발표용 — 실제 사이클 하나를 끝까지 따라가는 사례 중심
+  슬라이드 재료(위 개요 문서와 별도)
 - `docs/integration_audit_2026-10-02.md`: 백엔드·프론트·AI 전체 정합성 감사
 - `docs/serving_architecture.md`: AI 서빙 설계, 배포, 일별 갱신
 - `docs/backend_integration.md`: AI↔백엔드 연동 변경 이력
