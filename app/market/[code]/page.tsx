@@ -6,7 +6,7 @@ import { FiArrowLeft, FiHeart, FiShoppingBag } from "react-icons/fi";
 import CandleChart from "@/components/chart/CandleChart";
 import CartConfirmModal from "@/components/stock-list/CartConfirmModal";
 import TradeModal from "@/components/market/TradeModal";
-import { useStockList } from "@/lib/stock-list/StockListContext";
+import { resolveStockName, useStockList } from "@/lib/stock-list/StockListContext";
 import { fetchChartCandles, fetchCurrentPrice, fetchIntradayCandles } from "@/lib/api/prices";
 import type { StockCurrentPrice } from "@/lib/api/prices";
 import type { CandleType } from "@/lib/chart/types";
@@ -63,7 +63,7 @@ export default function StockDetailPage() {
     return () => { cancelled = true; };
   }, [code, chartRange.key]);
 
-  const name = currentPrice?.name ?? code;
+  const name = resolveStockName(code, currentPrice?.name || code);
   const priceStr = currentPrice?.priceFormatted ?? "-";
   const changeStr = currentPrice?.changeFormatted ?? "-";
   const isUp = currentPrice?.isUp ?? false;
