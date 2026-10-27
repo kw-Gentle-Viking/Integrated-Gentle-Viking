@@ -1,9 +1,15 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { AUTH_EVENT_NAME, apiFetch, getCurrentUser, updateCurrentUserFields } from "@/lib/signup/auth";
+import { AUTH_EVENT_NAME, apiFetch, getCurrentUser, riskScoreToLabel, updateCurrentUserFields } from "@/lib/signup/auth";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+
+type UserMeResponse = {
+  nickname: string | null;
+  email: string;
+  risk_score: number | null;
+};
 
 export default function ProfileSettings() {
   const [nickname, setNickname] = useState("Gentle Viking");
@@ -26,7 +32,24 @@ export default function ProfileSettings() {
     window.addEventListener(AUTH_EVENT_NAME, syncUser);
     window.addEventListener("storage", syncUser);
 
+    // 로컬 미러(gv-users)는 이 브라우저에서 가입/로그인한 적 없으면 비어있을 수 있다
+    // (예: 다른 기기에서 가입한 계정으로 처음 로그인). 실제 서버 값으로 덮어써서 항상
+    // 맞는 정보를 보여준다.
+    let cancelled = false;
+    apiFetch(`${API_BASE}/users/me`)
+      .then(async (res) => {
+        if (!res.ok || cancelled) return;
+        const data = (await res.json()) as UserMeResponse;
+        setNickname(data.nickname ?? "");
+        setEmail(data.email);
+        setRiskLabel(data.risk_score != null ? riskScoreToLabel(data.risk_score) : "-");
+      })
+      .catch(() => {
+        // 조회 실패 시 로컬 미러 값(위 syncUser)을 그대로 둔다.
+      });
+
     return () => {
+      cancelled = true;
       window.removeEventListener(AUTH_EVENT_NAME, syncUser);
       window.removeEventListener("storage", syncUser);
     };
