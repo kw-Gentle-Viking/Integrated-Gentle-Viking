@@ -40,7 +40,6 @@ export default function Assets() {
   }
 
   const a = assets;
-  const monthlyIsPos = a.monthly.totalKRW >= 0;
 
   return (
     <div className="space-y-6">
@@ -64,12 +63,6 @@ export default function Assets() {
             {fmt(a.totalKRW)}원
           </span>
           <div className="flex gap-2">
-            <button className="rounded-full border border-gray-200 bg-white px-4 py-1.5 text-sm font-semibold text-slate-700 shadow-[0_2px_10px_rgba(0,0,0,0.02)] transition hover:bg-gray-50">
-              채우기
-            </button>
-            <button className="rounded-full border border-gray-200 bg-white px-4 py-1.5 text-sm font-semibold text-slate-700 shadow-[0_2px_10px_rgba(0,0,0,0.02)] transition hover:bg-gray-50">
-              보내기
-            </button>
             <button
               type="button"
               onClick={() => invalidateAccountAssets()}
@@ -129,25 +122,14 @@ export default function Assets() {
       </div>
 
       <div className="overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-[0_2px_10px_rgba(0,0,0,0.02)]">
-        <div className="flex items-center justify-between border-b border-gray-50 px-5 py-4">
+        <div className="flex items-center justify-between px-5 py-4">
           <span className="text-sm font-bold text-slate-900">{currentMonth}월 수익</span>
-          <span className={`text-sm font-bold ${monthlyIsPos ? "text-red-500" : "text-blue-500"}`}>
-            {monthlyIsPos ? "+" : ""}{fmt(a.monthly.totalKRW)}원
-          </span>
+          <span className="text-xs font-bold text-slate-400">모의투자 미지원</span>
         </div>
-
-        {[
-          { label: "판매수익", value: a.monthly.saleKRW },
-          { label: "배당금", value: a.monthly.dividendKRW },
-          { label: "이자", value: a.monthly.interestKRW },
-        ].map(({ label, value }) => (
-          <div key={label} className="flex items-center justify-between border-b border-gray-50 px-5 py-3.5 last:border-none">
-            <span className="text-sm text-gray-500">{label}</span>
-            <span className="text-sm text-slate-700">
-              {value > 0 ? "+" : ""}{fmt(value)}원
-            </span>
-          </div>
-        ))}
+        <p className="px-5 pb-4 text-xs font-medium text-slate-400">
+          판매수익 · 배당금 · 이자는 한국투자증권 모의투자 계좌에서 제공하지 않는 항목이라 표시하지 않습니다.
+          평가손익은 위 보유 종목 목록에서 확인할 수 있습니다.
+        </p>
       </div>
     </div>
   );
