@@ -145,7 +145,7 @@ const RISK_INT_MAP = {
   volatility:    { LOW: 1, MID: 2, HIGH: 3 },
 } as const;
 
-function riskScoreToLabel(score: number): string {
+export function riskScoreToLabel(score: number): string {
   if (score <= 1) return "안정형";
   if (score <= 2) return "안정추구형";
   if (score <= 3) return "위험중립형";
@@ -321,7 +321,7 @@ export async function loginUser(
         experience: "NONE",
         volatility: "LOW",
       },
-      riskScore: 5,
+      riskScore: 1,
       riskLabel: "안정형",
       createdAt: new Date().toISOString(),
     };
@@ -467,6 +467,23 @@ export function getCurrentUser(): AuthUser | null {
   );
 
   return matchedUser ? toAuthUser(matchedUser) : null;
+}
+
+// 백엔드에 저장은 끝났지만 로컬 미러(gv-users)가 아직 예전 값이면, 재로그인 전까지 헤더/마이페이지
+// 등 getCurrentUser()를 읽는 다른 화면들이 옛 값을 계속 보여준다 -- 저장 직후 로컬도 같이 갱신한다.
+export function updateCurrentUserFields(fields: Partial<StoredUser>): void {
+  if (!canUseStorage()) return;
+  const sessionEmail = window.localStorage.getItem(SESSION_KEY);
+  if (!sessionEmail) return;
+
+  const users = readUsers();
+  const next = users.map((user) =>
+    normalizeEmail(user.email) === normalizeEmail(sessionEmail)
+      ? { ...user, ...fields }
+      : user,
+  );
+  writeUsers(next);
+  notifyAuthChange();
 }
 
 export function googleLogin(): void {

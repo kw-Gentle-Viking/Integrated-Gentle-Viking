@@ -5,17 +5,30 @@ type PortfolioAsideProps = {
   stocks: StockListItem[];
 };
 
+function parseWon(value: string) {
+  const parsed = Number(value.replace(/[^0-9.-]/g, ""));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
 export default function PortfolioAside({ stocks }: PortfolioAsideProps) {
+  // 아직 실제 보유 수량이 없는 종목들이라 "보유 평가액 기준 비중"은 계산할 수 없다. 대신
+  // 바구니 종목의 현재가 비율로 보여준다(동일 비중 1/3/1/3/1/3으로 고정돼 있던 걸 실제 시세
+  // 기반 계산으로 교체 -- 전부 같은 수량을 산다고 가정했을 때의 비중).
+  const prices = stocks.map((stock) => parseWon(stock.price));
+  const totalPrice = prices.reduce((sum, price) => sum + price, 0);
+
   return (
     <aside className="space-y-5">
       <section className="rounded-2xl bg-white p-6 shadow-[0_24px_80px_rgba(15,23,42,0.06)]">
         <h2 className="font-black">비중</h2>
+        <p className="mt-1 text-xs font-medium text-slate-400">
+          종목당 1주씩 산다고 가정했을 때 현재가 기준 비중
+        </p>
         <div className="mt-5 space-y-4">
-          {stocks.length > 0 ? (
-            stocks.slice(0, 3).map((stock) => {
-              const width =
-                Math.max(18, Math.round(100 / Math.min(stocks.length, 3))) +
-                "%";
+          {stocks.length > 0 && totalPrice > 0 ? (
+            stocks.map((stock, index) => {
+              const ratio = prices[index] / totalPrice;
+              const width = `${Math.round(ratio * 100)}%`;
 
               return (
                 <div key={stock.code}>
@@ -34,7 +47,7 @@ export default function PortfolioAside({ stocks }: PortfolioAsideProps) {
             })
           ) : (
             <p className="text-sm font-bold text-slate-400">
-              담긴 종목이 없습니다.
+              {stocks.length > 0 ? "현재가를 불러오는 중입니다." : "담긴 종목이 없습니다."}
             </p>
           )}
         </div>
