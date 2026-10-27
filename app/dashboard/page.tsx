@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import {
   FiBookOpen,
@@ -8,13 +9,16 @@ import {
   FiFileText,
 } from "react-icons/fi";
 import {
-  mockTodayNews,
-  mockDisclosures,
   mockRecentStocks,
 } from "@/lib/dashboard/mock";
 import LiveChartSection from "@/components/dashboard/LiveChartSection";
 import MarketOverviewSection from "@/components/dashboard/MarketOverviewSection";
 import { useAccountAssets } from "@/lib/account/assetsStore";
+
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+
+type NewsItem = { title: string; company: string; source: string; time: string; url: string };
+type DisclosureItem = { company: string; title: string; time: string; url: string };
 
 function formatWon(value: number) {
   return `${value.toLocaleString("ko-KR")}원`;
@@ -25,8 +29,34 @@ function formatRate(value: number) {
   return `${sign}${value.toFixed(2)}%`;
 }
 
+function useMarketFeed<T>(path: string) {
+  const [items, setItems] = useState<T[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`${API_BASE}${path}`)
+      .then(async (res) => {
+        if (!res.ok) throw new Error(String(res.status));
+        const data = (await res.json()) as { items: T[] };
+        if (!cancelled) setItems(data.items);
+      })
+      .catch(() => {
+        if (!cancelled) setItems([]);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [path]);
+
+  return { items, loading };
+}
+
 export default function DashboardPage() {
   const { assets, error: assetsError } = useAccountAssets();
+  const { items: news, loading: newsLoading } = useMarketFeed<NewsItem>("/market/news?limit=3");
+  const { items: disclosures, loading: disclosuresLoading } = useMarketFeed<DisclosureItem>("/market/disclosures?limit=3");
 
   const totalAssetsText = assets ? formatWon(assets.totalKRW) : assetsError ? "조회 실패" : "불러오는 중";
   const accountText = assets ? `${assets.broker} ${assets.accountNo}` : "계좌 조회 중";
@@ -73,25 +103,34 @@ export default function DashboardPage() {
           </div>
 
           <div className="space-y-2">
-            {mockTodayNews.slice(0, 3).map((news) => (
-              <div
-                key={news.title}
-                className="rounded-lg bg-white/80 px-2.5 py-2 ring-1 ring-violet-100 transition hover:bg-white"
-              >
-                <div className="mb-0.5 flex items-center justify-between gap-3">
-                  <span className="text-xs font-black text-violet-400">뉴스</span>
-                  <span className="text-xs font-bold text-slate-400">
-                    {news.time}
-                  </span>
-                </div>
-                <p className="text-xs font-black leading-5 text-slate-800">
-                  {news.title}
-                </p>
-                <p className="mt-0.5 text-xs font-bold text-slate-400">
-                  {news.source}
-                </p>
-              </div>
-            ))}
+            {newsLoading ? (
+              <p className="px-2.5 py-2 text-xs font-bold text-slate-400">불러오는 중...</p>
+            ) : news.length === 0 ? (
+              <p className="px-2.5 py-2 text-xs font-bold text-slate-400">표시할 뉴스가 없습니다.</p>
+            ) : (
+              news.map((item) => (
+                <a
+                  key={item.url || item.title}
+                  href={item.url || undefined}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="block rounded-lg bg-white/80 px-2.5 py-2 ring-1 ring-violet-100 transition hover:bg-white"
+                >
+                  <div className="mb-0.5 flex items-center justify-between gap-3">
+                    <span className="text-xs font-black text-violet-400">{item.company}</span>
+                    <span className="text-xs font-bold text-slate-400">
+                      {item.time}
+                    </span>
+                  </div>
+                  <p className="text-xs font-black leading-5 text-slate-800">
+                    {item.title}
+                  </p>
+                  <p className="mt-0.5 text-xs font-bold text-slate-400">
+                    {item.source}
+                  </p>
+                </a>
+              ))
+            )}
           </div>
         </article>
 
@@ -108,27 +147,36 @@ export default function DashboardPage() {
           </div>
 
           <div className="space-y-2">
-            {mockDisclosures.slice(0, 3).map((item) => (
-              <div
-                key={`${item.company}-${item.title}`}
-                className="group rounded-lg bg-white/85 px-2.5 py-2 transition hover:bg-white"
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <p className="text-xs font-black text-amber-700">
-                      {item.company}
-                    </p>
-                    <p className="mt-0.5 text-xs font-black leading-5 text-slate-950">
-                      {item.title}
-                    </p>
-                    <p className="mt-0.5 text-xs font-bold text-slate-400">
-                      오늘 {item.time}
-                    </p>
+            {disclosuresLoading ? (
+              <p className="px-2.5 py-2 text-xs font-bold text-slate-400">불러오는 중...</p>
+            ) : disclosures.length === 0 ? (
+              <p className="px-2.5 py-2 text-xs font-bold text-slate-400">표시할 공시가 없습니다.</p>
+            ) : (
+              disclosures.map((item) => (
+                <a
+                  key={`${item.company}-${item.title}-${item.time}`}
+                  href={item.url || undefined}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="group block rounded-lg bg-white/85 px-2.5 py-2 transition hover:bg-white"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-xs font-black text-amber-700">
+                        {item.company}
+                      </p>
+                      <p className="mt-0.5 text-xs font-black leading-5 text-slate-950">
+                        {item.title}
+                      </p>
+                      <p className="mt-0.5 text-xs font-bold text-slate-400">
+                        {item.time}
+                      </p>
+                    </div>
+                    <FiExternalLink className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-300 transition group-hover:text-amber-700" />
                   </div>
-                  <FiExternalLink className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-300 transition group-hover:text-amber-700" />
-                </div>
-              </div>
-            ))}
+                </a>
+              ))
+            )}
           </div>
         </article>
 
