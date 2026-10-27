@@ -21,7 +21,7 @@ export default function PortfolioSummaryCards({
       </div>
       <div className="rounded-xl bg-rose-50 p-5">
         <p className="text-sm font-bold text-slate-500">오늘 변동</p>
-        <p className="mt-2 text-3xl font-black text-rose-500">
+        <p className="mt-2 whitespace-nowrap text-xl font-black text-rose-500">
           AI 리포트 연동
         </p>
       </div>
