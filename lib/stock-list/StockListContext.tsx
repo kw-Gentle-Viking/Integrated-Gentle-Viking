@@ -80,15 +80,46 @@ async function fetchBasketItems(): Promise<StockListItem[]> {
   });
 }
 
+async function addFavoriteItem(stock: StockListItem) {
+  await apiFetch(`${process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"}/favorites`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ticker: stock.code, ticker_name: stock.name }),
+  });
+}
+
+async function removeFavoriteItem(code: string) {
+  await apiFetch(`${process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"}/favorites/${encodeURIComponent(code)}`, {
+    method: "DELETE",
+  });
+}
+
+async function fetchFavoriteItems(): Promise<StockListItem[]> {
+  const res = await apiFetch(`${process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"}/favorites`);
+  if (!res.ok) return [];
+  const items = (await res.json()) as BackendBasketItem[];
+  return items.map((item) => {
+    const name = resolveStockName(item.ticker, item.ticker_name);
+    return {
+      code: item.ticker,
+      name,
+      price: "-",
+      change: "-",
+      logoText: name.slice(0, 1),
+    };
+  });
+}
+
 async function hydrateLivePrice(
   stock: StockListItem,
-  setCartStocks: React.Dispatch<React.SetStateAction<StockListItem[]>>,
+  setStocks: React.Dispatch<React.SetStateAction<StockListItem[]>>,
 ) {
   try {
     // /prices/current(KIS inquire-price)는 종목명을 내려주지 않는다(업종명만 있음) --
-    // 가격·등락률만 갱신한다. 이름은 fetchBasketItems에서 이미 resolveStockName으로 처리됨.
+    // 가격·등락률만 갱신한다. 이름은 fetchBasketItems/fetchFavoriteItems에서 이미
+    // resolveStockName으로 처리됨.
     const live = await fetchCurrentPrice(stock.code);
-    setCartStocks((prev) =>
+    setStocks((prev) =>
       prev.map((item) =>
         item.code === stock.code
           ? { ...item, price: live.priceFormatted, change: live.changeFormatted }
@@ -138,6 +169,15 @@ export const StockListProvider = ({ children }: { children: React.ReactNode }) =
         await new Promise((resolve) => setTimeout(resolve, 300));
       }
     });
+    void fetchFavoriteItems().then(async (items) => {
+      if (cancelled || items.length === 0) return;
+      setFavoriteStocks(items);
+      for (const item of items) {
+        if (cancelled) return;
+        await hydrateLivePrice(item, setFavoriteStocks);
+        await new Promise((resolve) => setTimeout(resolve, 300));
+      }
+    });
     void apiFetch(`${process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"}/basket/universe`)
       .then((res) => (res.ok ? res.json() : Promise.reject(new Error(String(res.status)))))
       .then((data: { tickers: string[] }) => {
@@ -151,11 +191,19 @@ export const StockListProvider = ({ children }: { children: React.ReactNode }) =
   const cart = cartStocks.map((stock) => stock.code);
 
   const toggleFavorite = (code: string, stock?: StockListItem) => {
+    const nextStock = stock ?? makeFallbackStock(code);
+    const removing = favoriteStocks.some((item) => item.code === code);
+
     setFavoriteStocks((prev) => {
-      if (prev.some((item) => item.code === code)) {
+      if (removing) {
         return prev.filter((item) => item.code !== code);
       }
-      return upsertStock(prev, stock ?? makeFallbackStock(code));
+      return upsertStock(prev, nextStock);
+    });
+
+    const sync = removing ? removeFavoriteItem(code) : addFavoriteItem(nextStock);
+    void sync.catch((error) => {
+      console.error("favorite sync failed", error);
     });
   };
 
