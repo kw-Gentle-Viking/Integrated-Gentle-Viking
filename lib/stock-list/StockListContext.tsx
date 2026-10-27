@@ -41,7 +41,7 @@ const KNOWN_STOCK_NAMES: Record<string, string> = {
   "207940": "삼성바이오로직스",
 };
 
-function resolveStockName(code: string, fallback: string): string {
+export function resolveStockName(code: string, fallback: string): string {
   return KNOWN_STOCK_NAMES[code] ?? fallback;
 }
 

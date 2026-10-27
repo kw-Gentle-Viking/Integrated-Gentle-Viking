@@ -7,7 +7,7 @@ import { FiAlertCircle, FiArrowLeft, FiCpu, FiRefreshCw, FiShoppingBag } from "r
 import { apiFetch } from "@/lib/signup/auth";
 import { startPredictionJob, useEnsurePredictionJob, usePredictionJob } from "@/lib/ai/predictionJobStore";
 import CartConfirmModal from "@/components/stock-list/CartConfirmModal";
-import { StockListItem, useStockList } from "@/lib/stock-list/StockListContext";
+import { StockListItem, resolveStockName, useStockList } from "@/lib/stock-list/StockListContext";
 
 type Prediction = {
   buy: number;
@@ -235,7 +235,7 @@ function PredictContent() {
   const searchParams = useSearchParams();
   const code = searchParams.get("code") ?? "005930";
   const stock: StockPrediction = {
-    name: searchParams.get("name") || "종목명 없음",
+    name: resolveStockName(code, searchParams.get("name") || code),
     code,
     price: searchParams.get("price") || "-",
     change: searchParams.get("change") || "-",
