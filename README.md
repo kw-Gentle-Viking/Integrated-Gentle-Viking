@@ -3,7 +3,14 @@
 KOSPI 상위 200 종목 대상, 익일 매수/관망/매도 3분류 예측 AI (TFT). 백엔드(`Back-Gentle-Viking`)·프론트엔드
 (`Front-Gentle-Viking`)는 별도 레포로 관리됨.
 
-## 확정 모델 (E4 최종 후보)
+## 현재 라이브 모델
+
+`serving/best_model_state_dict.pt` = `v3_structure_nowd_cs-seed0-staticwd` (2026-10-19 23시경부터).
+아래 "확정 모델" 절은 이 레시피가 E4에서 처음 챔피언으로 뽑혔을 때의 기록이고, 라이브로 올라간 뒤
+두 번 교체됐다(이벤트 플래그 버그 수정 → evtfix, 정적 임베딩 과의존 완화 → staticwd). 교체 경위와
+근거는 `docs/model_swap_narrative_2026-10.md`에 정리했다.
+
+## 확정 모델 (E4 최종 후보, 2026-10-02 선정 당시 기록)
 
 ### 식별 정보
 
@@ -119,7 +126,8 @@ fixed effect는 이 체크포인트의 val 윈도우 종목별 평균을 그대�
    - `STOP`: 사용자 종목 제거.
    - `ONCE`: 백그라운드 스레드에서 한 번 추론하고 `callback_url`(백엔드 `/ai/callback`)로 결과를 보낸다.
 
-**모델**: `serving/best_model_state_dict.pt` = 확정 모델 `v3_structure_nowd_cs` seed0. 모든 결과에 `TFT_MODEL_VERSION`(`v3_structure_nowd_cs-seed0`)이 붙는다.
+**모델**: `serving/best_model_state_dict.pt` = 현재 라이브 모델(위 "현재 라이브 모델" 절). 모든 결과에
+`TFT_MODEL_VERSION`(`.env`에서 읽음, 지금은 `v3_structure_nowd_cs-seed0-staticwd`)이 붙는다.
 
 ### 2. 백엔드 (`Back-Gentle-Viking`)
 
@@ -143,7 +151,13 @@ fixed effect는 이 체크포인트의 val 윈도우 종목별 평균을 그대�
    4. 종목별로: 시세 없으면 SKIP → 확신도 미달이면 SKIP → 전략 주문이 없으면 HOLD → AI·전략 신호 불일치면 HOLD → 수량 계산 → `RiskManager` 확인(종목당·1회 주문·전체 노출) → KIS 주문(실패 시 10초 간격 3회 재시도) → 체결이면 포지션 갱신, `TradeLog`·`AutoTradeDecision` 기록, 종목마다 커밋.
    5. 예외는 종목 단위로 막고 다음 종목으로 진행한다.
 
-### 3. 현재 상태와 남은 제약 (2026-10-05 기준)
+### 3. 현재 상태와 남은 제약 (2026-10-05 기준, 구조는 그대로 유지됨)
+
+아래 항목들은 구조 설명으로는 지금도 맞다. 날짜가 지난 뒤 실제로 확인된 것: 자동매매 루프 전
+구간(잔고 조회→배분→전략→주문→기록)이 정상 동작하는 것을 라이브에서 확인했고(체결 자체는
+`ultra_safe`의 확신도 임계값 때문에 계속 0건 — 버그 아님, `docs/live_ops_report_2026-10-20_to_2026-10-23.md`),
+10/7엔 KIS 토큰 재발급 누락 버그가 한 번 있었으나 당일 수정·확인됐다.
+
 
 - **KIS 모의계좌**: 잔고 조회 200 확인 완료. 계좌는 `50215383-01`(모의). 실주문은 `KIS_MOCK=true`에서만 나간다.
 - **체결 기록**: 주문 후 KIS 체결 조회(`inquire-daily-ccld`)로 체결 수량·평균가를 가져와 `TradeLog`에 기록한다(조회 실패 시 결정 시점 가격으로 대체).
