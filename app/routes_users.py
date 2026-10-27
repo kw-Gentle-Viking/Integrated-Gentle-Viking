@@ -63,7 +63,13 @@ def update_profile(
             raise HTTPException(status_code=422, detail="투자성향 항목을 모두 입력해주세요")
         risk_score = calculate_risk_score(**values)
 
-    return update_user_profile(db, current_user, payload, risk_score)
+    try:
+        return update_user_profile(db, current_user, payload, risk_score)
+    except IntegrityError as e:
+        db.rollback()
+        if "nickname" in str(e.orig).lower():
+            raise HTTPException(status_code=409, detail="이미 사용 중인 닉네임입니다")
+        raise HTTPException(status_code=409, detail="중복된 값이 있습니다")
 
 
 # 본인 정보만 조회 가능 (예전에는 로그인 없이 누구나 임의 회원의 이메일/전화/생년월일을 볼 수 있었다)
