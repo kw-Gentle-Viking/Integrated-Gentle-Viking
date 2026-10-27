@@ -25,8 +25,11 @@ export default function SettingsPage() {
         {settings.map((item) => {
           const Icon = item.icon;
           return (
-            <article key={item.title} className="rounded-xl border border-slate-100 p-5 transition hover:bg-slate-50">
-              <Icon className="h-6 w-6 text-[#5267ff]" />
+            <article key={item.title} className="rounded-xl border border-slate-100 p-5">
+              <div className="flex items-start justify-between gap-3">
+                <Icon className="h-6 w-6 text-[#5267ff]" />
+                <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-black text-slate-400">준비 중</span>
+              </div>
               <p className="mt-4 text-lg font-black text-slate-950">{item.title}</p>
               <p className="mt-2 text-sm leading-6 text-slate-500">{item.desc}</p>
             </article>

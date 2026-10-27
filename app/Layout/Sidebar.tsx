@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
@@ -20,6 +21,7 @@ import {
 import { TbReportAnalytics } from "react-icons/tb";
 import { useSidebar } from "@/components/sidebar/SidebarContext";
 import { logoutUser } from "@/lib/signup/auth";
+import { fetchRecentTradeCount } from "@/lib/notifications/tradeFeed";
 
 const NAV_ITEMS = [
   { name: "홈", href: "/dashboard", icon: FiGrid },
@@ -37,8 +39,8 @@ const MYPAGE_ITEMS = [
   { key: "profile", label: "내 정보 변경", icon: FiUser },
 ];
 
-const SECONDARY_ITEMS = [
-  { name: "알림", href: "/notifications", icon: FiBell, badge: "3" },
+const SECONDARY_ITEMS_BASE = [
+  { name: "알림", href: "/notifications", icon: FiBell },
   { name: "설정", href: "/settings", icon: FiSettings },
 ];
 
@@ -49,6 +51,23 @@ export default function Sidebar() {
   const { isOpen, toggleSidebar } = useSidebar();
   const isStandalonePage =
     pathname === "/" || pathname === "/login" || pathname === "/signup";
+
+  // 최근 24시간 내 체결 건수를 "알림" 뱃지로 쓴다(읽음/안읽음 추적은 없음 -- 실제 최근 활동 건수).
+  const [recentTradeCount, setRecentTradeCount] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    fetchRecentTradeCount(24)
+      .then((count) => { if (!cancelled) setRecentTradeCount(count); })
+      .catch(() => { if (!cancelled) setRecentTradeCount(0); });
+    return () => { cancelled = true; };
+  }, []);
+
+  const SECONDARY_ITEMS = SECONDARY_ITEMS_BASE.map((item) =>
+    item.name === "알림" && recentTradeCount > 0
+      ? { ...item, badge: recentTradeCount > 9 ? "9+" : String(recentTradeCount) }
+      : item,
+  );
+
   if (isStandalonePage) return null;
 
   const activeMypageTab = searchParams.get("tab") ?? "assets";
