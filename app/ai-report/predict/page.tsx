@@ -113,11 +113,30 @@ function cleanMarkdown(line: string) {
     .trim();
 }
 
+function isMarkdownTableRow(line: string) {
+  return line.startsWith("|") && line.endsWith("|");
+}
+
+// 헤더 구분행(| :--- | :--- |)은 보여줄 내용이 없으니 통째로 버린다.
+function isMarkdownTableDivider(line: string) {
+  return isMarkdownTableRow(line) && /^\|[\s:-]*\|([\s:-]*\|)*$/.test(line);
+}
+
+// 표 데이터행은 파이프 문법 그대로 두면 지저분하니 셀을 " · "로 이어 붙인 한 줄로 바꾼다.
+function formatMarkdownTableRow(line: string) {
+  return line
+    .slice(1, -1)
+    .split("|")
+    .map((cell) => cleanMarkdown(cell))
+    .filter(Boolean)
+    .join(" · ");
+}
+
 function parseReportSections(report: string): ReportSection[] {
   const lines = report
     .split(/\n+/)
     .map((line) => line.trim())
-    .filter((line) => line && line !== "---");
+    .filter((line) => line && line !== "---" && !isMarkdownTableDivider(line));
 
   const sections: ReportSection[] = [];
   let current: ReportSection = { title: "AI 요약", body: [] };
@@ -130,7 +149,7 @@ function parseReportSections(report: string): ReportSection[] {
       continue;
     }
 
-    const cleaned = cleanMarkdown(line);
+    const cleaned = isMarkdownTableRow(line) ? formatMarkdownTableRow(line) : cleanMarkdown(line);
     if (cleaned) current.body.push(cleaned);
   }
 
