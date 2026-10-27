@@ -3,7 +3,7 @@ import asyncio
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
-from app.ai_universe import is_ai_covered_ticker
+from app.ai_universe import is_ai_covered_ticker, get_cap_type
 from app.limits import MAX_BASKET_TICKERS
 from app.intraday_seed import seed_live_candles
 from app.allocation_policy import allocation_policy, per_order_notional_cap
@@ -304,8 +304,9 @@ async def trading_loop(user_id: int, tickers: list[str], persona_id: int,
                 predictions = []
                 for ticker in tickers:
                     pred = ai_client.predict(ticker)
+                    pred["cap_type"] = get_cap_type(ticker)
                     predictions.append(pred)
-                
+
                 allocation = allocate_portfolio(
                 predictions=predictions,
                 persona_id=persona_id,

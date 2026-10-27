@@ -35,7 +35,6 @@ def allocate_portfolio(
     multiplier = PERSONA_MULTIPLIER.get(persona_id, PERSONA_MULTIPLIER[3])
 
     for b in buys:
-        # TODO: 실제로는 ticker로 대형주 여부 판단 (시가총액 기준)
         cap_type = b.get("cap_type", "default")
         persona_multiplier = multiplier.get(cap_type, 1.0) if use_persona_boost else 1.0
         b["adj_confidence"] = b["confidence"] * persona_multiplier

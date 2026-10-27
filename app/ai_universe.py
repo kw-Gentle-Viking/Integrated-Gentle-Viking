@@ -47,3 +47,33 @@ def is_ai_covered_ticker(ticker: str) -> bool:
     if universe is None:
         return True
     return ticker in universe
+
+
+# 페르소나별 대형주/중소형주 선호 배분(services_allocation.allocate_portfolio)이 쓸 분류.
+# ticker_universe.rank는 시가총액 기준 순위(1이 최대)다 -- 상위 50위(코스피 200 유니버스의 상위
+# 25%)를 large_cap으로 본다. 이전에는 이 분류 자체가 없어서(TODO로만 남아있었음) 페르소나별
+# 대형주 선호 가중치가 항상 "default"로만 적용되고 있었다(2026-10-27 발견).
+_LARGE_CAP_RANK_CUTOFF = 50
+_cap_type_cache: dict = {"by_ticker": None, "loaded_at": 0.0}
+
+
+def get_cap_types(force_refresh: bool = False) -> dict[str, str]:
+    """{ticker: "large_cap" | "default"}. STOCK_DB_V2_DSN 미설정이면 빈 dict(전부 default로 간주)."""
+    if not STOCK_DB_V2_DSN:
+        return {}
+    now = time.monotonic()
+    if not force_refresh and _cap_type_cache["by_ticker"] is not None and now - _cap_type_cache["loaded_at"] < CACHE_TTL_SEC:
+        return _cap_type_cache["by_ticker"]
+    with _get_engine().connect() as conn:
+        rows = conn.execute(text("SELECT ticker, rank FROM ticker_universe")).fetchall()
+    by_ticker = {
+        r[0]: ("large_cap" if r[1] is not None and r[1] <= _LARGE_CAP_RANK_CUTOFF else "default")
+        for r in rows
+    }
+    _cap_type_cache["by_ticker"] = by_ticker
+    _cap_type_cache["loaded_at"] = now
+    return by_ticker
+
+
+def get_cap_type(ticker: str) -> str:
+    return get_cap_types().get(ticker, "default")
