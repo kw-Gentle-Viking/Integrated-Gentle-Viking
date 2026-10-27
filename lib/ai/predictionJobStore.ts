@@ -90,7 +90,9 @@ export function normalizePrediction(data: BackendPrediction): PredictionResult {
       data.report ||
       data.gemini_report ||
       data.analysis ||
-      "백엔드 응답에 상세 분석 리포트가 포함되지 않았습니다.",
+      // 5분 주기 push 결과에는 상세 리포트가 없다(ONCE 요청에만 Gemini가 리포트를 생성함) --
+      // 백엔드 오류가 아니라 아직 상세 리포트를 요청한 적이 없다는 뜻이라 문구를 그에 맞게 둔다.
+      "아직 상세 분석 리포트를 요청하지 않았습니다. 위 '새로고침' 버튼으로 AI 분석을 요청해보세요.",
   };
 }
 
