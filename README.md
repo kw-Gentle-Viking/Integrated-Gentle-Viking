@@ -138,10 +138,10 @@
 
 ## 관련 문서
 
-- `docs/integration_audit_2026-10-02.md` (ai 브랜치): 백엔드·프론트·AI 전체 정합성 감사
-- `docs/serving_architecture.md` (ai 브랜치): AI 서빙 설계, 배포, 일별 갱신
-- `docs/backend_integration.md` (ai 브랜치): AI↔백엔드 연동 변경 이력
-- `docs/rollout_plan_2026-10.md` (ai 브랜치): 10/6 실행 계획과 GCP 배포 계획
+- `docs/integration_audit_2026-10-02.md`: 백엔드·프론트·AI 전체 정합성 감사
+- `docs/serving_architecture.md`: AI 서빙 설계, 배포, 일별 갱신
+- `docs/backend_integration.md`: AI↔백엔드 연동 변경 이력
+- `docs/rollout_plan_2026-10.md`: 10/6 실행 계획과 GCP 배포 계획
 - `docs/model_swap_narrative_2026-10.md` (ai 브랜치): 라이브 모델 교체 서사(evtfix → staticwd) —
   증상 발견, 근본 원인 진단, 검토한 접근, 결정, 실행 경위를 시간순으로 정리
 - `docs/inference_fill_report_2026-10-06_to_08.md`, `docs/inference_fill_report_2026-10-20_to_23.md`
