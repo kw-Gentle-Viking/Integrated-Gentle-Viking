@@ -15,6 +15,7 @@ from backtest.routes import router as backtest_router
 from app.routes_rec import router as rec_router
 
 from app.routes_basket import router as basket_router
+from app.routes_favorites import router as favorites_router
 from app.routes_trade import router as trade_router
 
 from app.routes_ai_webhook import router as ai_webhook_router
@@ -79,6 +80,7 @@ app.include_router(backtest_router, prefix="/backtest", tags=["backtest"])
 app.include_router(rec_router, prefix="/recommendation", tags=["recommendation"])
 
 app.include_router(basket_router, prefix="/basket", tags=["basket"])
+app.include_router(favorites_router, prefix="/favorites", tags=["favorites"])
 app.include_router(trade_router, prefix="/trade", tags=["trade"])
 
 app.include_router(ai_webhook_router, prefix="/ai", tags=["ai-webhook"])

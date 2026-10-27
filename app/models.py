@@ -57,9 +57,11 @@ class User(Base):
 
     reports: Mapped[list["RecommendationReport"]] = relationship(back_populates="user")
     
-    baskets : Mapped[list["Basket"]] = relationship(back_populates="user") 
-    
+    baskets : Mapped[list["Basket"]] = relationship(back_populates="user")
+
     trade_logs: Mapped[list["TradeLog"]] = relationship(back_populates="user")
+
+    favorites: Mapped[list["Favorite"]] = relationship(back_populates="user")
 
 
 class Persona(Base):
@@ -178,6 +180,20 @@ class Basket(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
     user: Mapped["User"] = relationship(back_populates="baskets")
+
+
+# 관심종목(watchlist) -- 자동매매 바구니(Basket)와 달리 AI 유니버스 제한도, 5개 상한도 없다.
+# "관심 종목" 화면이 저장 없이 순수 React state였던 걸 고치려고 추가(2026-10-27).
+class Favorite(Base):
+    __tablename__ = "favorites"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    ticker: Mapped[str] = mapped_column(String(10))
+    ticker_name: Mapped[str] = mapped_column(String(100))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+    user: Mapped["User"] = relationship(back_populates="favorites")
 
 
 class ManualTradeLock(Base):
