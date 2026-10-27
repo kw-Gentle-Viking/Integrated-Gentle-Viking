@@ -142,6 +142,8 @@
   정리한 프로젝트 개요(이 README의 보완판)
 - `docs/single_cycle_trace_example.md`: 발표용 — 실제 사이클 하나를 끝까지 따라가는 사례 중심
   슬라이드 재료(위 개요 문서와 별도)
+- `docs/ui_screens_gallery.md`: 발표용 — 프론트엔드 전체 화면 캡처 모음 + 캡처 중 발견한
+  미해결 이슈 목록
 - `docs/integration_audit_2026-10-02.md`: 백엔드·프론트·AI 전체 정합성 감사
 - `docs/serving_architecture.md`: AI 서빙 설계, 배포, 일별 갱신
 - `docs/backend_integration.md`: AI↔백엔드 연동 변경 이력
