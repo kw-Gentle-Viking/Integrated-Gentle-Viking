@@ -83,7 +83,7 @@ export default function Sidebar() {
         }`}
       >
         <span
-          className={`flex items-center ${isOpen ? "gap-3" : "justify-center"}`}
+          className={`flex items-center whitespace-nowrap ${isOpen ? "gap-3" : "justify-center"}`}
         >
           <Icon className="h-4 w-4 shrink-0" />
           {isOpen ? item.name : null}
