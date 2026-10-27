@@ -8,6 +8,7 @@ import CartConfirmModal from "@/components/stock-list/CartConfirmModal";
 import TradeModal from "@/components/market/TradeModal";
 import { resolveStockName, useStockList } from "@/lib/stock-list/StockListContext";
 import { fetchChartCandles, fetchCurrentPrice, fetchIntradayCandles } from "@/lib/api/prices";
+import { recordRecentStock } from "@/lib/dashboard/recentStocks";
 import type { StockCurrentPrice } from "@/lib/api/prices";
 import type { CandleType } from "@/lib/chart/types";
 import type { OrderSide } from "@/lib/api/trade";
@@ -40,6 +41,12 @@ export default function StockDetailPage() {
     fetchCurrentPrice(code)
       .then(setCurrentPrice)
       .catch(() => setCurrentPrice(null));
+  }, [code]);
+
+  // 대시보드 "최근에 본 종목"용 조회 이력
+  useEffect(() => {
+    if (!code) return;
+    recordRecentStock(code);
   }, [code]);
 
   // 차트

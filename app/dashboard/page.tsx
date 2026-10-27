@@ -8,17 +8,19 @@ import {
   FiExternalLink,
   FiFileText,
 } from "react-icons/fi";
-import {
-  mockRecentStocks,
-} from "@/lib/dashboard/mock";
 import LiveChartSection from "@/components/dashboard/LiveChartSection";
 import MarketOverviewSection from "@/components/dashboard/MarketOverviewSection";
 import { useAccountAssets } from "@/lib/account/assetsStore";
+import { resolveStockName } from "@/lib/stock-list/StockListContext";
+import { fetchCurrentPrice } from "@/lib/api/prices";
+import { getRecentStockCodes } from "@/lib/dashboard/recentStocks";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+const MAX_RECENT_SHOWN = 3;
 
 type NewsItem = { title: string; company: string; source: string; time: string; url: string };
 type DisclosureItem = { company: string; title: string; time: string; url: string };
+type RecentStock = { code: string; name: string; price: string; change: string; isUp: boolean | null };
 
 function formatWon(value: number) {
   return `${value.toLocaleString("ko-KR")}원`;
@@ -53,10 +55,49 @@ function useMarketFeed<T>(path: string) {
   return { items, loading };
 }
 
+function useRecentStocks() {
+  const [stocks, setStocks] = useState<RecentStock[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    const codes = getRecentStockCodes().slice(0, MAX_RECENT_SHOWN);
+    if (codes.length === 0) {
+      setLoading(false);
+      return;
+    }
+    setStocks(codes.map((code) => ({ code, name: resolveStockName(code, code), price: "-", change: "-", isUp: null })));
+    (async () => {
+      for (const code of codes) {
+        if (cancelled) return;
+        try {
+          const live = await fetchCurrentPrice(code);
+          if (cancelled) return;
+          setStocks((prev) =>
+            prev.map((s) =>
+              s.code === code
+                ? { ...s, name: resolveStockName(code, live.name || code), price: live.priceFormatted, change: live.changeFormatted, isUp: live.isUp }
+                : s,
+            ),
+          );
+        } catch (error) {
+          console.error(`recent stock price fetch failed for ${code}`, error);
+        }
+        await new Promise((resolve) => setTimeout(resolve, 300));
+      }
+      if (!cancelled) setLoading(false);
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  return { stocks, loading };
+}
+
 export default function DashboardPage() {
   const { assets, error: assetsError } = useAccountAssets();
   const { items: news, loading: newsLoading } = useMarketFeed<NewsItem>("/market/news?limit=3");
   const { items: disclosures, loading: disclosuresLoading } = useMarketFeed<DisclosureItem>("/market/disclosures?limit=3");
+  const { stocks: recentStocks, loading: recentLoading } = useRecentStocks();
 
   const totalAssetsText = assets ? formatWon(assets.totalKRW) : assetsError ? "조회 실패" : "불러오는 중";
   const accountText = assets ? `${assets.broker} ${assets.accountNo}` : "계좌 조회 중";
@@ -193,34 +234,41 @@ export default function DashboardPage() {
           </div>
 
           <div className="space-y-2">
-            {mockRecentStocks.map((stock) => (
-              <div
-                key={stock.code}
-                className="flex items-center gap-3 rounded-lg border border-slate-100 p-2.5"
-              >
-                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-xs font-black text-slate-500">
-                  {stock.name.slice(0, 1)}
-                </span>
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-xs font-black text-slate-950">
-                    {stock.name}
-                  </p>
-                  <p className="text-xs font-bold text-slate-400">
-                    {stock.code}
-                  </p>
-                </div>
-                <div className="text-right">
-                  <p className="text-xs font-black text-slate-950">
-                    {stock.price}
-                  </p>
-                  <p
-                    className={`text-xs font-black ${stock.change.startsWith("-") ? "text-blue-500" : "text-rose-500"}`}
-                  >
-                    {stock.change}
-                  </p>
-                </div>
-              </div>
-            ))}
+            {recentLoading && recentStocks.length === 0 ? (
+              <p className="px-2.5 py-2 text-xs font-bold text-slate-400">불러오는 중...</p>
+            ) : recentStocks.length === 0 ? (
+              <p className="px-2.5 py-2 text-xs font-bold text-slate-400">최근에 조회한 종목이 없습니다.</p>
+            ) : (
+              recentStocks.map((stock) => (
+                <Link
+                  key={stock.code}
+                  href={`/market/${stock.code}`}
+                  className="flex items-center gap-3 rounded-lg border border-slate-100 p-2.5 transition hover:bg-slate-50"
+                >
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-xs font-black text-slate-500">
+                    {stock.name.slice(0, 1)}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-xs font-black text-slate-950">
+                      {stock.name}
+                    </p>
+                    <p className="text-xs font-bold text-slate-400">
+                      {stock.code}
+                    </p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-xs font-black text-slate-950">
+                      {stock.price}
+                    </p>
+                    <p
+                      className={`text-xs font-black ${stock.isUp === null ? "text-slate-400" : stock.isUp ? "text-rose-500" : "text-blue-500"}`}
+                    >
+                      {stock.change}
+                    </p>
+                  </div>
+                </Link>
+              ))
+            )}
           </div>
         </article>
       </section>
