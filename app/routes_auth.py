@@ -45,12 +45,6 @@ class GoogleReq(BaseModel):
 @router.post("/login", response_model=TokenPair)
 def login(payload: LoginReq, db: Session = Depends(get_db)):
     user = get_user_by_email(db, payload.email)
-    print("user:", user)
-    print("password_hash:", user.password_hash if user else None)
-    print(
-        "verify:",
-        verify_password(payload.password, user.password_hash) if user else None,
-    )
 
     if (
         not user
