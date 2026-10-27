@@ -44,12 +44,12 @@ AI 서버와 백엔드는 완전히 분리된 프로세스라서, 모델을 바�
 
 | 영역 | 구성 |
 |---|---|
-| AI/모델 | PyTorch 2.6 + PyTorch Lightning, TFT(Temporal Fusion Transformer) 구조(`tft-torch` 오픈소스 기반), scikit-learn, pandas/numpy |
-| AI 서빙 | FastAPI(추론 API), PostgreSQL(피처/예측 이력), cron 기반 5분 주기 스케줄링 |
-| 백엔드 | FastAPI, SQLAlchemy + PostgreSQL, JWT(python-jose) + bcrypt(passlib) 인증, WebSocket(실시간 시세 구독) |
-| 외부 연동 | 한국투자증권 Open API(모의투자, `mojito2`), Google Gemini API(종목 리포트 생성) |
-| 프론트엔드 | Next.js 16 (React 19) + TypeScript, Tailwind CSS 4, lightweight-charts(시세 차트) |
-| 운영 | Linux cron(추론·수집·점검 스케줄링), bash 워치독 스크립트(프로세스 다운 감지·재기동) |
+| AI/모델 | PyTorch 기반 TFT(Temporal Fusion Transformer), 오픈소스 구현 기반 |
+| AI 서빙 | FastAPI 추론 서버, PostgreSQL, 5분 주기 스케줄링 |
+| 백엔드 | FastAPI, PostgreSQL, JWT 인증, 실시간 시세 구독 |
+| 외부 연동 | 한국투자증권 Open API(모의투자), Google Gemini API(종목 리포트 생성) |
+| 프론트엔드 | Next.js(React), 시세 차트 |
+| 운영 | Linux cron 스케줄링, 워치독 스크립트(프로세스 다운 감지·재기동) |
 
 프론트엔드는 종목 탐색·자동매매 바구니 구성·포트폴리오 조회 화면을 백엔드 REST API로만 통신하는
 얇은 클라이언트로 두고, 판단·주문 로직은 전부 백엔드에 뒀다.
@@ -66,10 +66,9 @@ AI 서버와 백엔드는 완전히 분리된 프로세스라서, 모델을 바�
 - **정적 임베딩 전용 dropout**(실험만, 최종 미채택): 정적 특성 과의존 완화 실험 중 하나로
   구조에 넣어봤지만 성능이 더 나빠서(4.3절) 쓰지 않았다.
 
-**지금 라이브에 실제로 쓰이는 수정(`static_weight_decay`)은 아키텍처 변경이 아니다.** 학습
-스크립트에서 옵티마이저(Adam)에 넘기는 파라미터 그룹을 "정적 임베딩 파라미터"와 "나머지"로
-나눠서, 정적 임베딩 그룹에만 추가로 weight decay(과적합 억제)를 건 것뿐이다. 모델의 구조·파라미터
-개수·순전파 로직은 완전히 동일하다.
+**지금 라이브에 실제로 쓰이는 수정(`static_weight_decay`)은 아키텍처 변경이 아니다.** 모델
+구조는 그대로 두고, 학습 설정(정적 임베딩에만 추가 적용한 weight decay, 과적합 억제 기법)만
+조정한 것이다.
 
 ### 4.2 입력 피처 (분류별)
 
@@ -176,7 +175,6 @@ TFT는 입력을 세 종류로 나눠 받는 구조다. 이 프로젝트는 세 
 | 시나리오 | 조건 | 체결 가능 건수(확신도 0.40 기준, 3일 누적) |
 |---|---|---|
 | 지금 운영 그대로 | AI 확신도 + 전략 기술조건(추세·RSI·볼린저) 둘 다 충족 | 0건 |
-| 기술조건만 완화 | RSI·볼린저 기준값만 느슨하게 | 6건 |
 | 기술조건 없이 AI 신호만 | 확신도 기준만 확인 | 8건 |
 
 확신도 기준을 낮춰도 체결은 거의 늘지 않지만(3일 합산 4건), 전략의 기술조건을 걷어내면 같은
