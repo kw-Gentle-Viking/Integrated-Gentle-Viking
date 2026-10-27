@@ -16,6 +16,7 @@ from app.demo import demo_mode_enabled
 from app.dependencies import get_current_user
 from app.kis_token_store import is_rate_limited, load_token, save_token, token_file_path
 from app.models import ManualTradeLock, TradeLog, User
+from app.services_market_feed import fetch_recent_news, fetch_recent_disclosures
 
 logger = logging.getLogger(__name__)
 
@@ -778,4 +779,17 @@ async def get_account_assets(current_user: User = Depends(get_current_user)):
             "output2_len": len(output2),
         },
     }
+
+
+# ── 홈 대시보드 "오늘의 뉴스" / "오늘의 공시" ─────────────────────────────────
+# 지금 AI가 추론하는 5종목 기준 실제 뉴스(네이버 검색 API)·공시(DART API) 조회.
+# 이전엔 lib/dashboard/mock.ts의 고정 목록이었다(2026-10-27 실제 연동으로 교체).
+@router.get("/market/news")
+def get_market_news(limit: int = 4):
+    return {"items": fetch_recent_news(limit=limit)}
+
+
+@router.get("/market/disclosures")
+def get_market_disclosures(limit: int = 4):
+    return {"items": fetch_recent_disclosures(limit=limit)}
 
