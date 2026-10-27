@@ -82,7 +82,10 @@ export default function AITradeHistory() {
   }, []);
 
   // 이 화면은 체결 건만 보여준다(마이페이지 문구): 실패한 주문(FAILED)은 제외한다.
-  const filledTrades = trades.filter((trade) => trade.status !== "FAILED");
+  // 수동 주문(strategy_id === "manual")은 "주문내역" 탭 몫이라 여기서는 뺀다.
+  const filledTrades = trades.filter(
+    (trade) => trade.status !== "FAILED" && trade.strategy_id !== "manual",
+  );
   const filtered = filter === "전체"
     ? filledTrades
     : filledTrades.filter((trade) => toAction(trade.side) === filter);
