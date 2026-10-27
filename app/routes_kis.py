@@ -15,7 +15,7 @@ from app.db import get_db
 from app.demo import demo_mode_enabled
 from app.dependencies import get_current_user
 from app.kis_token_store import is_rate_limited, load_token, save_token, token_file_path
-from app.models import ManualTradeLock, User
+from app.models import ManualTradeLock, TradeLog, User
 
 logger = logging.getLogger(__name__)
 
@@ -458,15 +458,34 @@ async def place_order(
         raise HTTPException(status_code=resp.status_code, detail=resp.text)
 
     data = resp.json()
-    if data.get("rt_cd") == "0":
+    order_ok = data.get("rt_cd") == "0"
+    if order_ok:
         exists = db.query(ManualTradeLock).filter(
             ManualTradeLock.user_id == current_user.id,
             ManualTradeLock.ticker == body.code,
         ).first()
         if not exists:
             db.add(ManualTradeLock(user_id=current_user.id, ticker=body.code))
-            db.commit()
         print(f"[User {current_user.id}] 직접매매 종목 등록: {body.code}")
+
+    # 마이페이지 "주문내역"이 읽는 기록 -- 이게 없어서 그 탭이 빈 하드코딩 목록이었다
+    # (2026-10-27 발견). 시장가 주문은 이 시점엔 체결가를 모르므로 price=0으로 남기고,
+    # 프론트가 "시장가"로 표시한다(추정치를 지어내지 않음).
+    order_no = (data.get("output") or {}).get("ODNO") if order_ok else None
+    db.add(TradeLog(
+        user_id=current_user.id,
+        ticker=body.code,
+        side=body.side.upper(),
+        qty=body.qty,
+        price=body.price if body.price_type == "limit" else 0,
+        amount=(body.price * body.qty) if body.price_type == "limit" else 0,
+        ai_signal="MANUAL",
+        ai_confidence=0.0,
+        strategy_id="manual",
+        status="FILLED" if order_ok else "FAILED",
+        order_no=order_no,
+    ))
+    db.commit()
 
     return data
 
