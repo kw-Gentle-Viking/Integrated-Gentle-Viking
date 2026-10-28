@@ -57,6 +57,11 @@ def relay(cmd: dict) -> None:
         "user_id": str(cmd.get("user_id", "")),
         "tickers": cmd.get("tickers", []),
         "callback_url": cmd.get("callback_url") or f"{BACKEND_WEBHOOK_URL}/ai/callback",
+        # 백엔드 큐의 job_id를 넘겨주지 않으면 AI 서버가 ONCE마다 자기 job_id를 새로 만들어버려서,
+        # 프론트(/ai/predictions/request)가 원래 job_id로 /ai/once/{job_id}를 폴링해도 영원히
+        # 404가 난다 -- Gemini 리포트는 정상 생성되는데 화면은 "아직 못 받음"에 멈춰있었다
+        # (2026-10-28 발견).
+        "job_id": cmd.get("job_id", ""),
     }
     resp = requests.post(
         f"{AI_SERVING_URL}/command",
