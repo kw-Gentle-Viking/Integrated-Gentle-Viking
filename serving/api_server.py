@@ -128,7 +128,10 @@ def run_once_inference(user_id: str, tickers: list[str], callback_url: str, job_
             headers = {"Content-Type": "application/json"}
             if AI_SERVER_API_KEY:
                 headers["X-API-Key"] = AI_SERVER_API_KEY
-            resp = requests.post(callback_url, json=payload, headers=headers, timeout=15)
+            # 백엔드가 콜백 안에서 Gemini 보고서까지 동기 생성한다(ticker당 최대 3회 재시도
+            # 포함) -- 15초는 너무 짧아서 백엔드가 실제로는 끝까지 처리/저장했는데도 이쪽
+            # 로그에 "전송 실패"로 찍히는 오탐이 있었다(2026-10-28 발견).
+            resp = requests.post(callback_url, json=payload, headers=headers, timeout=90)
             resp.raise_for_status()
             logger.info("[%s] callback 전송 완료 -> %s", job_id, resp.status_code)
         except Exception as e:
