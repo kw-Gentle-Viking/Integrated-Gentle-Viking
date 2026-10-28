@@ -20,7 +20,7 @@ import {
 } from "react-icons/fi";
 import { TbReportAnalytics } from "react-icons/tb";
 import { useSidebar } from "@/components/sidebar/SidebarContext";
-import { logoutUser } from "@/lib/signup/auth";
+import { AUTH_EVENT_NAME, getAccessToken, logoutUser } from "@/lib/signup/auth";
 import { fetchRecentTradeCount } from "@/lib/notifications/tradeFeed";
 
 const NAV_ITEMS = [
@@ -56,10 +56,21 @@ export default function Sidebar() {
   const [recentTradeCount, setRecentTradeCount] = useState(0);
   useEffect(() => {
     let cancelled = false;
-    fetchRecentTradeCount(24)
-      .then((count) => { if (!cancelled) setRecentTradeCount(count); })
-      .catch(() => { if (!cancelled) setRecentTradeCount(0); });
-    return () => { cancelled = true; };
+    // 구글 로그인 콜백 경로에서는 이 레이아웃이 토큰이 저장되기 전에 먼저 마운트돼서 한 번은
+    // 401이 확정이고, 마운트 1회성이라 로그인 뒤에도 다시 안 불렸다(2026-10-28, StockListContext와
+    // 같은 원인). 토큰 없으면 건너뛰고, 로그인 완료(AUTH_EVENT_NAME) 시 다시 불러온다.
+    const load = () => {
+      if (!getAccessToken()) return;
+      fetchRecentTradeCount(24)
+        .then((count) => { if (!cancelled) setRecentTradeCount(count); })
+        .catch(() => { if (!cancelled) setRecentTradeCount(0); });
+    };
+    load();
+    window.addEventListener(AUTH_EVENT_NAME, load);
+    return () => {
+      cancelled = true;
+      window.removeEventListener(AUTH_EVENT_NAME, load);
+    };
   }, []);
 
   const SECONDARY_ITEMS = SECONDARY_ITEMS_BASE.map((item) =>

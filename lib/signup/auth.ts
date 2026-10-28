@@ -121,6 +121,11 @@ function writeUsers(users: StoredUser[]) {
     return rest;
   });
   window.localStorage.setItem(USERS_KEY, JSON.stringify(sanitized));
+  // Header/Sidebar는 마운트 시점에 한 번만 getCurrentUser()를 읽고 이후엔 AUTH_EVENT_NAME 이벤트로만
+  // 다시 읽는다. writeSession()은 이 이벤트를 쏘지만 writeUsers()는 안 쏴서, Google 로그인처럼
+  // "세션부터 연 뒤 비동기로 실제 유저 정보를 나중에 써넣는" 경로에서는 화면이 갱신 전 값(fallback)에
+  // 멈춰있는 문제가 있었다(2026-10-28 발견: 헤더에 실제 이름 대신 "Gentle Viking" 고정값이 뜸).
+  notifyAuthChange();
 }
 
 function writeSession(email: string) {
@@ -521,6 +526,47 @@ export async function handleGoogleCallback(
 
   const normalizedEmail = normalizeEmail(email);
   writeSession(normalizedEmail);
+
+  // Google 로그인은 이름·프로필 사진이 백엔드 User 레코드에만 저장된다(/auth/google/callback).
+  // 로컬 gv-users 미러는 이메일/비밀번호 가입 때 쓰던 캐시라, 같은 이메일로 예전에 로컬 테스트
+  // 계정을 만들어둔 적이 있으면 그 캐시된 이름(예: 테스트용 닉네임)이 실제 구글 프로필 이름 대신
+  // 그대로 떠버리는 문제가 있었다(2026-10-28 발견). 그래서 Google 로그인 직후엔 로컬 캐시를
+  // 먼저 보지 않고, 백엔드 /users/me를 조회해 실제 저장된 값을 우선한다.
+  try {
+    const meRes = await fetch(`${API_BASE}/users/me`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (meRes.ok) {
+      const me = (await meRes.json()) as {
+        id: number;
+        email: string;
+        name: string | null;
+        nickname: string | null;
+        phone: string | null;
+        birth_date: string | null;
+        created_at: string;
+      };
+      const resolvedName = me.name || normalizedEmail.split('@')[0];
+      const user: AuthUser = {
+        id:              String(me.id),
+        name:            resolvedName,
+        email:           me.email,
+        nickname:        me.nickname || resolvedName,
+        birthdate:       me.birth_date ?? '',
+        phone:           me.phone ?? '',
+        consentRequired: false,
+        riskProfile:     { goal: 'PRESERVE', horizon: 'LT3M', lossTolerance: 'LT5', experience: 'NONE', volatility: 'LOW' },
+        riskScore:       5,
+        riskLabel:       '안정형',
+        createdAt:       me.created_at,
+      };
+      const others = readUsers().filter(
+        (u) => normalizeEmail(u.email) !== normalizedEmail,
+      );
+      writeUsers([...others, user as StoredUser]);
+      return { ok: true, user };
+    }
+  } catch { /* 네트워크 실패 시 아래 로컬 캐시/fallback으로 넘어감 */ }
 
   const localUser = readUsers().find(
     (u) => normalizeEmail(u.email) === normalizedEmail,

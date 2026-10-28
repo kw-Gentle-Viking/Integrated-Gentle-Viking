@@ -1,7 +1,7 @@
 "use client";
 
 import React, { createContext, useContext, useEffect, useState } from "react";
-import { apiFetch } from "@/lib/signup/auth";
+import { AUTH_EVENT_NAME, apiFetch, getAccessToken } from "@/lib/signup/auth";
 import { fetchCurrentPrice } from "@/lib/api/prices";
 
 export type StockListItem = {
@@ -159,32 +159,48 @@ export const StockListProvider = ({ children }: { children: React.ReactNode }) =
 
   useEffect(() => {
     let cancelled = false;
-    void fetchBasketItems().then(async (items) => {
-      if (cancelled || items.length === 0) return;
-      setCartStocks(items);
-      // KIS 시세 조회는 짧은 간격의 연속 호출에 취약하므로 살짝 간격을 두고 순차 조회한다.
-      for (const item of items) {
-        if (cancelled) return;
-        await hydrateLivePrice(item, setCartStocks);
-        await new Promise((resolve) => setTimeout(resolve, 300));
-      }
-    });
-    void fetchFavoriteItems().then(async (items) => {
-      if (cancelled || items.length === 0) return;
-      setFavoriteStocks(items);
-      for (const item of items) {
-        if (cancelled) return;
-        await hydrateLivePrice(item, setFavoriteStocks);
-        await new Promise((resolve) => setTimeout(resolve, 300));
-      }
-    });
-    void apiFetch(`${process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"}/basket/universe`)
-      .then((res) => (res.ok ? res.json() : Promise.reject(new Error(String(res.status)))))
-      .then((data: { tickers: string[] }) => {
-        if (!cancelled) setAutoTradeUniverse(new Set(data.tickers));
-      })
-      .catch((error) => console.error("auto-trade universe load failed", error));
-    return () => { cancelled = true; };
+
+    // 구글 로그인 콜백처럼 "루트 레이아웃이 먼저 마운트되고 토큰은 비동기로 나중에 쓰이는" 경로에서는
+    // 이 useEffect가 토큰이 저장되기 전에 한 번 실행돼버려 관심종목/바구니/AI 유니버스가 전부 401로
+    // 빈 채 멈추고, 마운트 1회성이라 토큰이 생긴 뒤에도 다시 안 돌았다(2026-10-28 발견). 마운트 시
+    // 1회 + 로그인 완료(AUTH_EVENT_NAME) 시 다시 실행하도록 고쳤다.
+    const loadAll = () => {
+      // 토큰이 아직 없으면 어차피 401이 확정이라 요청 자체를 보내지 않는다 -- 로그인 완료 시
+      // AUTH_EVENT_NAME으로 다시 호출된다.
+      if (!getAccessToken()) return;
+      void fetchBasketItems().then(async (items) => {
+        if (cancelled || items.length === 0) return;
+        setCartStocks(items);
+        // KIS 시세 조회는 짧은 간격의 연속 호출에 취약하므로 살짝 간격을 두고 순차 조회한다.
+        for (const item of items) {
+          if (cancelled) return;
+          await hydrateLivePrice(item, setCartStocks);
+          await new Promise((resolve) => setTimeout(resolve, 300));
+        }
+      });
+      void fetchFavoriteItems().then(async (items) => {
+        if (cancelled || items.length === 0) return;
+        setFavoriteStocks(items);
+        for (const item of items) {
+          if (cancelled) return;
+          await hydrateLivePrice(item, setFavoriteStocks);
+          await new Promise((resolve) => setTimeout(resolve, 300));
+        }
+      });
+      void apiFetch(`${process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"}/basket/universe`)
+        .then((res) => (res.ok ? res.json() : Promise.reject(new Error(String(res.status)))))
+        .then((data: { tickers: string[] }) => {
+          if (!cancelled) setAutoTradeUniverse(new Set(data.tickers));
+        })
+        .catch((error) => console.error("auto-trade universe load failed", error));
+    };
+
+    loadAll();
+    window.addEventListener(AUTH_EVENT_NAME, loadAll);
+    return () => {
+      cancelled = true;
+      window.removeEventListener(AUTH_EVENT_NAME, loadAll);
+    };
   }, []);
 
   const favorites = favoriteStocks.map((stock) => stock.code);
