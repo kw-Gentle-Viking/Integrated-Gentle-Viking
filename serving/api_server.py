@@ -128,10 +128,11 @@ def run_once_inference(user_id: str, tickers: list[str], callback_url: str, job_
             headers = {"Content-Type": "application/json"}
             if AI_SERVER_API_KEY:
                 headers["X-API-Key"] = AI_SERVER_API_KEY
-            # 백엔드가 콜백 안에서 Gemini 보고서까지 동기 생성한다(ticker당 최대 3회 재시도
-            # 포함) -- 15초는 너무 짧아서 백엔드가 실제로는 끝까지 처리/저장했는데도 이쪽
-            # 로그에 "전송 실패"로 찍히는 오탐이 있었다(2026-10-28 발견).
-            resp = requests.post(callback_url, json=payload, headers=headers, timeout=90)
+            # 백엔드가 콜백 안에서 Gemini 보고서까지 동기 생성한다(ticker당 최대 3회 재시도 +
+            # 지수 백오프 포함) -- 15초는 너무 짧아서 로그에 "전송 실패" 오탐이 났었다(2026-10-28
+            # 1차 발견, timeout=90으로 올림). 그런데도 쿼터가 빡빡할 때 재시도가 길어지면 90초도
+            # 실제로 넘겨서(2026-10-28 재현, 94초+) 같은 오탐이 또 났다 -- 여유 있게 180초로 올림.
+            resp = requests.post(callback_url, json=payload, headers=headers, timeout=180)
             resp.raise_for_status()
             logger.info("[%s] callback 전송 완료 -> %s", job_id, resp.status_code)
         except Exception as e:
@@ -149,6 +150,7 @@ class CommandRequest(BaseModel):
     user_id: str
     tickers: list[str] = []
     callback_url: str = ""
+    job_id: str = ""
 
 
 @app.post("/command")
@@ -188,7 +190,9 @@ async def handle_command(
         }
 
     elif req.command == "ONCE":
-        job_id = f"report_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{req.user_id}"
+        # 백엔드가 큐에 넣은 job_id가 있으면 그대로 써야 /ai/once/{job_id} 폴링(프론트 "새로고침")이
+        # 결과를 찾을 수 있다 -- 없을 때만(직접 /command 호출 등) 자체 생성한다.
+        job_id = req.job_id or f"report_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{req.user_id}"
         background_tasks.add_task(run_once_inference, req.user_id, req.tickers, req.callback_url, job_id)
         logger.info("ONCE 접수: %s / tickers=%s", job_id, req.tickers)
         return {"status": "accepted", "job_id": job_id, "estimated_seconds": 5}
